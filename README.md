@@ -26,6 +26,7 @@
     * **Fundamental Analyst**: 提取 CapEx、回购及 ROE 等高质量指标。
     * **Valuation Expert**: 推导 DCF 参数并执行内在价值计算。
     * **Sentiment Analyst**: 监控 13F 持仓与技术面情绪。
+    * **Bull and Bear**: 加入多空博弈，综合各方观点
 3.  **Circuit Breaker**: 全局监听 `app_graph.stream()`，捕获任何节点的 `ValidationError` 或 `APIError`。
 4.  **Chief Analyst**: 综合所有脱水数据，生成具备“机构感”的深度研报。
 
