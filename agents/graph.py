@@ -4,8 +4,30 @@ from langgraph.graph import StateGraph, END
 from tools.finance_tool import get_detailed_finance, get_growth_metrics, calculate_intrinsic_dcf, get_macro_rates, get_advanced_metrics
 from tools.news_tool import get_real_market_data
 from agents.state import AgentState
-from agents.prompts import VALUATION_PROMPT, CLEANER_PROMPT, CHIEF_PROMPT
+from agents.prompts import BULL_PROMPT, BEAR_PROMPT, CLEANER_PROMPT, CHIEF_PROMPT, VALUATION_PROMPT
 from core.config import Config
+import streamlit as st
+from agents.intent_parser import parse_user_input
+
+def intent_node(state: AgentState):
+
+    print(f"🎯 正在解析用户意图...")
+    
+    user_text = state.get("user_prompt", "")
+    
+    intent_data = parse_user_input(user_text)
+    raw_concerns = intent_data.get("user_concerns", "无")
+    if isinstance(raw_concerns, list):
+        processed_concerns = "；".join(raw_concerns)
+    else:
+        processed_concerns = raw_concerns
+    return {
+        "ticker": intent_data["ticker"],
+        "investment_horizon": intent_data["investment_horizon"],
+        "user_concerns": processed_concerns,
+        "sector": intent_data["sector"]
+    }
+
 
 def macro_analyst(state: AgentState):
     print("-> [Parallel] 宏观专家正在调研...")
@@ -80,30 +102,64 @@ def valuation_expert(state: AgentState):
     
     return {"valuation_data": dcf_results}
 
-def data_cleaning_node(state: AgentState):
-    print("-> [Process] 首席助理正在清洗、脱水数据...")
-    llm = Config.get_llm(temperature=0.1)
-    chain = CLEANER_PROMPT | llm
-    
-    res = chain.invoke({
-        "macro_data": state.get("macro_data"),
-        "fundamental_data": state.get("fundamental_data"),
-        "advanced_metrics": state.get("advanced_metrics"), # 新增
-        "valuation_data": state.get("valuation_data"),
-        "sentiment_data": state.get("sentiment_data")
-    })
-    return {"cleaned_context": res.content}
+# 获取当前 UI 中配置的模型（如果没有则使用默认值）
+def get_configured_model(role_type: str):
+    if "model_config" in st.session_state:
+        return st.session_state.model_config.get(role_type, "qwen3.5-flash")
+    return "qwen3.5-flash"  # 默认模型
 
-def chief_analyst_synthesis(state: AgentState):
-    print("-> [Merge] 首席分析师开始撰写深度报告...")
-    llm = Config.get_llm(temperature=0.3)
-    chain = CHIEF_PROMPT | llm
-    
+def bull_analyst(state: AgentState):
+    model_name = get_configured_model("debate_model")
+    llm = Config.get_llm(temperature=0.7, model_name=model_name)
+    chain = BULL_PROMPT | llm
     res = chain.invoke({
         "ticker": state["ticker"],
-        "cleaned_context": state.get("cleaned_context", "无清洗数据")
+        "user_concerns": state.get("user_concerns", ""),
+        "fundamentals": state.get("fundamental_data", {}), 
+        "macro_context": state.get("macro_data", ""),       
+        "sentiment": state.get("sentiment_data", "")
     })
+    return {"bull_thesis": res.content}
+
+def bear_analyst(state: AgentState):
+    model_name = get_configured_model("debate_model")
+    llm = Config.get_llm(temperature=0.6, model_name=model_name)
+    chain = BEAR_PROMPT | llm
+    res = chain.invoke({
+        "ticker": state["ticker"],
+        "user_concerns": state.get("user_concerns", ""),
+        "fundamentals": state.get("fundamental_data", {}),
+        "macro_context": state.get("macro_data", ""),
+        "sentiment": state.get("sentiment_data", "")
+    })    
+    return {"bear_thesis": res.content}
+
+def chief_analyst_synthesis(state: AgentState):
+    model_name = get_configured_model("chief_model")
+    llm = Config.get_llm(temperature=0.3, model_name=model_name)
+    chain = CHIEF_PROMPT | llm
+    res = chain.invoke({
+        "ticker": state["ticker"],
+        "investment_horizon": state.get("investment_horizon", "未指定"),
+        "user_concerns": state.get("user_concerns", "无"),
+        "bull_thesis": state.get("bull_thesis", ""),
+        "bear_thesis": state.get("bear_thesis", ""),
+        "macro_data": state.get("macro_data", ""),
+        "fundamental_data": state.get("fundamental_data", {})
+    })    
     return {"final_report": res.content}
+
+def data_cleaning_node(state: AgentState):
+    print("-> 🧹 首席助理正在汇总多空博弈记录...")
+    # 这里我们可以扩展 CLEANER_PROMPT，让它把 bull_thesis 和 bear_thesis 整理进 Context
+    context = f"""
+    【多方观点】: {state.get('bull_thesis')}
+    【空方观点】: {state.get('bear_thesis')}
+    【宏观背景】: {state.get('macro_data')}
+    【财务指标】: {state.get('fundamental_data')}
+    """
+    # 实际运行中可以再跑一次 LLM 进行 Token 压缩
+    return {"cleaned_context": context}
 
 
 def input_node(state: AgentState):
@@ -111,35 +167,37 @@ def input_node(state: AgentState):
     print(f"🚀 启动多维度专家并行调研: {state['ticker']}")
     return state
 
+
 def build_graph():
     workflow = StateGraph(AgentState)
-
-    # 1. 注册所有节点
-    workflow.add_node("start_router", input_node) # 新增起始路由
+    workflow.add_node("intent_analyzer", intent_node) # 新的起点
+    # 1. 注册节点
     workflow.add_node("macro", macro_analyst)
     workflow.add_node("fundamental", fundamental_analyst)
-    workflow.add_node("valuation", valuation_expert)
     workflow.add_node("sentiment", sentiment_analyst)
+    
+    workflow.add_node("bull_expert", bull_analyst) # 新增
+    workflow.add_node("bear_expert", bear_analyst) # 新增
+    
     workflow.add_node("cleaner", data_cleaning_node)
     workflow.add_node("chief", chief_analyst_synthesis)
 
-    # --- 2. 重新编排边 (Fan-out 逻辑) ---
-    # 改变策略：先调研宏观和基本面，再进行估值推理
-    workflow.set_entry_point("start_router")
-
-    # 第一阶段：调研
-    workflow.add_edge("start_router", "macro")
-    workflow.add_edge("start_router", "fundamental")
-    workflow.add_edge("start_router", "sentiment")
-
-    # 第二阶段：估值（等待宏观结果回传）
-    workflow.add_edge("macro", "valuation") 
-
-    # 第三阶段：汇总
-    workflow.add_edge("fundamental", "cleaner")
-    workflow.add_edge("valuation", "cleaner") # 现在 valuation 包含了 macro 的信息
-    workflow.add_edge("sentiment", "cleaner")
-
+    # 2. 编排边关系
+    # 第一阶段：三路并行数据采集
+    workflow.set_entry_point("intent_analyzer") # 入口变为意图分析
+    
+    # 意图分析完成后，分发给并行的调研节点
+    workflow.add_edge("intent_analyzer", "macro")
+    workflow.add_edge("intent_analyzer", "fundamental")
+    workflow.add_edge("intent_analyzer", "sentiment")
+    
+    # 第二阶段：数据齐备后，分发给多空两方进行辩论 (Fan-out)
+    workflow.add_edge("sentiment", "bull_expert")
+    workflow.add_edge("sentiment", "bear_expert")
+    
+    # 第三阶段：多空意见汇总 (Fan-in)
+    workflow.add_edge(["bull_expert", "bear_expert"], "cleaner")
+    
     workflow.add_edge("cleaner", "chief")
     workflow.add_edge("chief", END)
 
