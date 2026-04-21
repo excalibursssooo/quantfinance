@@ -1,6 +1,6 @@
 # src/tools/finance_tool.py
 import yfinance as yf
-
+import pandas as pd
 def get_detailed_finance(ticker: str) -> dict:
     try:
         stock = yf.Ticker(ticker)
@@ -97,3 +97,63 @@ def calculate_intrinsic_dcf(ticker: str, growth_rate: float, terminal_growth: fl
         "current_price": current_price,
         "margin_of_safety_percent": margin_of_safety
     }
+
+
+
+def get_advanced_metrics(ticker: str) -> dict:
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        cashflow = stock.cashflow
+        
+        # 1. 资本配置 (Capital Allocation)
+        capex = "数据缺失"
+        buybacks = "数据缺失"
+        if not cashflow.empty:
+            # 提取资本支出
+            if "Capital Expenditure" in cashflow.index:
+                capex = cashflow.loc["Capital Expenditure"].iloc[0]
+            # 提取股票回购 (通常在现金流表中表现为负值，取绝对值)
+            if "Repurchase Of Capital Stock" in cashflow.index:
+                val = cashflow.loc["Repurchase Of Capital Stock"].iloc[0]
+                buybacks = abs(val) if pd.notna(val) else "无回购"
+
+        dividend_yield = info.get("dividendYield", 0)
+
+        # 2. 相对大盘强度 (Relative Strength vs SPY)
+        # 获取该股与标普500过去一年的收益率对比
+        hist_stock = stock.history(period="1y")
+        spy = yf.Ticker("SPY").history(period="1y")
+        
+        rs_1y = None
+        stock_return = None
+        spy_return = None
+        if not hist_stock.empty and not spy.empty:
+            stock_return = (hist_stock['Close'].iloc[-1] - hist_stock['Close'].iloc[0]) / hist_stock['Close'].iloc[0]
+            spy_return = (spy['Close'].iloc[-1] - spy['Close'].iloc[0]) / spy['Close'].iloc[0]
+            rs_1y = stock_return - spy_return
+
+        # 3. 估值分位与护城河指标
+        trailing_pe = info.get("trailingPE")
+        forward_pe = info.get("forwardPE")
+        # 如果 Forward PE 显著低于 Trailing PE，说明盈利预期在增长
+
+        return {
+            "capital_allocation": {
+                "capex_latest": capex,
+                "stock_buybacks_latest": buybacks,
+                "dividend_yield": round(dividend_yield, 4) if dividend_yield else 0
+            },
+            "relative_strength": {
+                "stock_1y_return": round(stock_return, 4) if stock_return else "N/A",
+                "spy_1y_return": round(spy_return, 4) if spy_return else "N/A",
+                "alpha_vs_spy": round(rs_1y, 4) if rs_1y else "N/A"
+            },
+            "valuation_context": {
+                "trailing_pe": trailing_pe,
+                "forward_pe": forward_pe,
+                "price_to_book": info.get("priceToBook")
+            }
+        }
+    except Exception as e:
+        return {"error": f"高级指标抓取失败: {str(e)}"}

@@ -1,7 +1,6 @@
 # src/agents/prompts.py
 from langchain_core.prompts import ChatPromptTemplate
 
-# 1. 估值专家参数推导 Prompt
 VALUATION_PROMPT = ChatPromptTemplate.from_template("""
 你是一位资深量化估值专家。你需要为 {ticker} 设定 DCF 模型的三个核心参数。
 严禁硬编码。请基于以下真实数据进行推导：
@@ -21,36 +20,39 @@ VALUATION_PROMPT = ChatPromptTemplate.from_template("""
 {{"g": 0.15, "tg": 0.02, "erp": 0.055, "reason": "在此简述推导逻辑"}}
 """)
 
-# 2. 清洗节点 Prompt
 CLEANER_PROMPT = ChatPromptTemplate.from_template("""
-你是一位精干的金融助理。请将以下四位专家的研报草稿进行去噪、提炼。
-合并成一份结构清晰的 <Context>，确保保留所有具体数值和推演逻辑。
+你是一位精干的金融助理。请将以下专家的研报草稿进行去噪、提炼，合并成一份结构清晰的 <Context>。
+特别注意：必须保留资本开支 (CapEx)、股票回购规模、以及与大盘 (SPY) 对比的相对强度 (Alpha)。
 
 【宏观数据】: {macro_data}
-【基本面】: {fundamental_data}
+【基础基本面】: {fundamental_data}
+【高阶数据 (回购/CapEx/相对强度)】: {advanced_metrics}
 【估值与DCF】: {valuation_data}
 【情绪面】: {sentiment_data}
 """)
 
-# 3. 首席分析师 Prompt
 CHIEF_PROMPT = ChatPromptTemplate.from_template("""
-你是一位供职于华尔街的资深首席分析师。请基于你的助理提供的精炼数据，为 {ticker} 撰写一份专业的分析报告。
-“数据是廉价的，洞察力才是昂贵的。”
+你是一位供职于华尔街的资深首席策略分析师。请基于你的助理提供的精炼数据，为 {ticker} 撰写一份专业的分析报告。
+不要只罗列数据，你要像真正的投行大拿一样“解读数据背后的动机”。
 
-### 核心数据与逻辑上下文:
+### 核心数据上下文:
 {cleaned_context}
 
-### 你的任务与要求:
-请按以下 Markdown 格式输出报告，逻辑必须闭环。如果 DCF 模型得出高估，请结合宏观利率和基本面解释原因。
-## {ticker} 首席深度分析报告
-### 1. 宏观天时 (Macro & Sentiment)
-(结合利率环境、情绪与 13F 动向)
-### 2. 地利与人和 (Fundamentals & Moat)
-(分析 ROE, FCF 质量以及行业壁垒)
-### 3. 估值锚定 (Valuation Assessment)
-(解读 DCF 模型的推导参数：g, r, tg，评估当前价格的安全边际)
-### 4. 首席 Checklist 与操作推演
-(灵魂三问：模式是否清晰？估值所处分位？极端抗风险能力？)
+### 你的撰写要求与逻辑框架:
+请按以下 Markdown 格式输出报告。
+## {ticker} 首席深度分析报告 (机构级)
+
+### 1. 市场相对表现与情绪 (Relative Strength & Sentiment)
+(解读该股过去一年的 Alpha 表现：跑赢还是跑输了标普500？背后的情绪支撑是什么？)
+
+### 2. 资本配置与基本面质量 (Capital Allocation & Moat)
+(重点剖析管理层的操作：他们在大量回购股票吗？资本开支 CapEx 是在萎缩还是扩张？结合 ROE 评价其盈利质量)
+
+### 3. 动态估值与安全边际 (Valuation Assessment)
+(解读 DCF 模型的内在价值推导。并对比 Trailing PE 与 Forward PE，判断当前估值处于历史的什么水位，是否被高估？)
+
+### 4. 首席交易建议 (Chief's Verdict)
+(给出机构视角的最终结论，结合宏观利率给出操作级别的推演)
 ---
-*AI量化生成，不构成投资建议*
+*AI 量化生成，融合最新 10-K/10-Q 指标，不构成投资建议*
 """)

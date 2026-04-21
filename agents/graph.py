@@ -1,7 +1,7 @@
 # src/agents/graph.py
 import json
 from langgraph.graph import StateGraph, END
-from tools.finance_tool import get_detailed_finance, get_growth_metrics, calculate_intrinsic_dcf, get_macro_rates
+from tools.finance_tool import get_detailed_finance, get_growth_metrics, calculate_intrinsic_dcf, get_macro_rates, get_advanced_metrics
 from tools.news_tool import get_real_market_data
 from agents.state import AgentState
 from agents.prompts import VALUATION_PROMPT, CLEANER_PROMPT, CHIEF_PROMPT
@@ -13,9 +13,14 @@ def macro_analyst(state: AgentState):
     return {"macro_data": news}
 
 def fundamental_analyst(state: AgentState):
-    print("-> [Parallel] 基本面专家正在拆解地利...")
+    print("-> [Parallel] 基本面专家正在拆解地利与高阶数据...")
     raw_data = get_detailed_finance(state["ticker"])
-    return {"fundamental_data": raw_data.get("fundamentals")}
+    adv_data = get_advanced_metrics(state["ticker"]) # 获取高阶指标
+    
+    return {
+        "fundamental_data": raw_data.get("fundamentals"),
+        "advanced_metrics": adv_data  # 写入状态
+    }
 
 def sentiment_analyst(state: AgentState):
     print("-> [Parallel] 情绪专家正在观察人和...")
@@ -42,7 +47,7 @@ def valuation_expert(state: AgentState):
         "sector": growth_data.get('sector', 'Unknown'),
         "historic_growth": growth_data.get('historic_revenue_growth', 'Unknown'),
         "analyst_growth": growth_data.get('analyst_growth_estimate', 'Unknown'),
-        "macro_context": state.get('macro_data', '无宏观数据')[:500],
+        "macro_context": state.get('macro_data', 'Unknown')[:1000],
         "beta": beta if beta else "未知，请根据行业平均估算",
         "rf_rate": rf_rate if rf_rate else "未能抓取，请根据目前美联储基准利率估算"
     })
@@ -83,6 +88,7 @@ def data_cleaning_node(state: AgentState):
     res = chain.invoke({
         "macro_data": state.get("macro_data"),
         "fundamental_data": state.get("fundamental_data"),
+        "advanced_metrics": state.get("advanced_metrics"), # 新增
         "valuation_data": state.get("valuation_data"),
         "sentiment_data": state.get("sentiment_data")
     })
