@@ -1,66 +1,51 @@
 
 ---
 
-# 📈 Quantfin-Oracle: 多智能体 AI 投研系统
+# 📈 Quantfin-Oracle: 多智能体投研系统
 
-**Quantfin-Oracle** 是一款基于 **LangGraph** 和 **LLM** 构建的深度股票分析系统。它模拟了华尔街投行分析师的工作流，通过多个并行工作的专家 Agent（宏观、基本面、估值、情绪）对美股标的进行全方位透视，并动态生成具有洞察力的深度投资报告。
+**Quantfin-Oracle** 是一款基于 **LangGraph** 和 **LLM** 构建的深度股票分析系统。它不仅模拟了华尔街投行分析师的工作流，更引入了**自动熔断机制**与**人工干预控制**，确保在波动的 API 环境下依然保持极高的系统稳定性。
 
 ---
 
 ## 🌟 核心亮点
-- **并行专家流 (Parallel Multi-Agent)**：采用 Fan-out/Fan-in 设计，宏观、财务、估值、情绪四个维度同步调研，极大提升分析效率。
-- **动态 DCF 建模**：系统实时抓取 **10年期美债收益率** 作为无风险利率，并结合 LLM 对历史数据的推理，动态设定增长率（g）和折现率（r）。
-- **数据驱动而非假设**：集成 `yfinance` 获取实时财务报表，集成 `Tavily Search` 获取 2026 最新宏观动态与市场情绪。
-- **工业级架构**：基于 LangGraph 实现复杂状态管理，确保长链条推理过程中的数据一致性与容错性。
-- **可视化 Web 界面**：内置 Streamlit 应用，一键生成排版精美的 Markdown 研报。
+
+- **并行专家流 (Parallel Multi-Agent)**：采用 Fan-out/Fan-in 设计，宏观、财务、估值、情绪四个维度同步调研。
+- **工业级容错 (Circuit Breaker)**：引入全局异常捕获机制，任何节点（API 超时、格式错误）出错均会即时触发系统熔断，防止无效计算消耗 Token。
+- **动态 DCF 建模**：实时抓取十年期美债收益率（^TNX）作为无风险利率，结合 CAPM 模型动态推导 WACC。
+
 ---
 
 ## 🏗️ 系统架构
 
-系统遵循“调研 -> 推理 -> 清洗 -> 决策”的逻辑：
+系统遵循“意图识别 -> 调研 -> 熔断保护 -> 决策”的逻辑：
 
-1.  **Input Node**: 接收股票代码（如 AAPL）。
+
+1.  **Intent Parser**: 利用结构化输出识别 Ticker 和用户核心关切。
 2.  **Expert Nodes (Parallel)**:
     * **Macro Analyst**: 调研美联储政策及行业宏观环境。
-    * **Fundamental Analyst**: 拆解 ROE、自由现金流与盈利质量。
+    * **Fundamental Analyst**: 提取 CapEx、回购及 ROE 等高质量指标。
     * **Valuation Expert**: 推导 DCF 参数并执行内在价值计算。
-    * **Sentiment Analyst**: 监控机构持仓(13F)与市场情绪。
-3.  **Data Cleaning Node**: 对各路专家返回的长文本进行脱水处理，提取关键数值指标。
-4.  **Chief Analyst Node**: 综合所有维度，套用专业分析师 Checklist，生成最终结论。
+    * **Sentiment Analyst**: 监控 13F 持仓与技术面情绪。
+3.  **Circuit Breaker**: 全局监听 `app_graph.stream()`，捕获任何节点的 `ValidationError` 或 `APIError`。
+4.  **Chief Analyst**: 综合所有脱水数据，生成具备“机构感”的深度研报。
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 环境准备
-确保您的电脑已安装 Python 3.10+。
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-```
-
-### 2. 配置环境变量
-在项目根目录创建 `.env` 文件，并填入您的 API Key：
+### 1. 配置环境变量
+在 `.env` 文件中填入您的配置：
 
 ```env
 OPENAI_API_KEY=sk-xxxx
-OPENAI_API_BASE_URL=https://api.openai.com/v1 # 可选
-MODEL_NAME=gpt-4o-mini
+OPENAI_API_BASE_URL=https://api.openai.com/v1
+MODEL_NAME=qwen3.6-flash # 或 deepseek-v3.2, gpt-4o
 TAVILY_API_KEY=tvly-xxxx
 ```
 
-### 3. 启动应用
-你可以通过命令行运行，也可以启动 Web 界面。
-
-**方式 A：启动 Web 应用（推荐）**
+### 2. 启动系统
 ```bash
 streamlit run app.py
-```
-
-**方式 B：命令行测试**
-```bash
-python main.py NVDA(可更改其他股票代码)
 ```
 
 ---
@@ -69,33 +54,23 @@ python main.py NVDA(可更改其他股票代码)
 
 ```text
 ├── agents/
-│   ├── graph.py       # LangGraph 工作流编排
-│   ├── state.py       # 系统状态定义
+│   ├── graph.py       # LangGraph 工作流编排（含 Fan-out 逻辑）
+│   ├── intent_parser.py # 强鲁棒性的意图解析器
+│   ├── state.py       # 系统 TypedDict 状态定义
 │   └── prompts.py     # 专家系统提示词
 ├── core/
-│   └── config.py      # 统一模型与配置中心
+│   └── config.py      # 模型与 API 统一配置中心
 |── tools/
-│   ├── finance_tool.py # yfinance 财务计算工具
+│   ├── finance_tool.py # YFinance 财务及 DCF 计算工具
 │   └── news_tool.py    # Tavily 实时搜索工具
-├── app.py                 # Streamlit Web 入口
-├── main.py                # 命令行入口
-├── .env                   # 环境变量配置
-└── requirements.txt       # 项目依赖
+├── app.py             # 支持流式输出与紧急停止的 Streamlit 入口
+├── .env               # 环境变量
+└── requirements.txt   # 项目依赖
 ```
 
 ---
 
-## 🛠️ 核心公式支持
-
-系统在估值节点中内置了标准的 DCF 模型支持：
-
-$$PV = \sum_{t=1}^{n} \frac{FCF_t}{(1+r)^t} + \frac{TV}{(1+r)^n}$$
-
-其中 **r (WACC)** 由系统根据实时 **Beta** 值与 **无风险利率** 通过 CAPM 模型计算得出。
-
----
-
 ## ⚠️ 免责声明
-本系统生成的所有分析报告均由人工智能基于公开数据生成，不构成任何形式的投资建议。股市有风险，投资需谨慎。
+本系统生成的所有分析报告均由人工智能基于公开数据生成，不构成投资建议。**AI 可能会产生幻觉，请务必核实计算结果。**
 
 ---
