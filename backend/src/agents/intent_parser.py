@@ -1,7 +1,7 @@
 from typing import Union, List
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
-from core.config import Config
+from src.core.config import Config
 
 class UserIntent(BaseModel):
     ticker: str = Field(description="提取的美股代码，必须全大写，如 NVDA。如果用户输入的是公司名(如英伟达)，请转换为对应的股票代码。")

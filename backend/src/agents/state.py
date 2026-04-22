@@ -1,8 +1,8 @@
-# src/agents/state.py
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Dict
 
 class AgentState(TypedDict):
     user_prompt: str
+    model_config: Dict[str, str]  
 
     ticker: str
     investment_horizon: str

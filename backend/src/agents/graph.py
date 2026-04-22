@@ -1,13 +1,12 @@
 # src/agents/graph.py
 import json
 from langgraph.graph import StateGraph, END
-from tools.finance_tool import get_detailed_finance, get_growth_metrics, calculate_intrinsic_dcf, get_macro_rates, get_advanced_metrics
-from tools.news_tool import get_real_market_data
-from agents.state import AgentState
-from agents.prompts import BULL_PROMPT, BEAR_PROMPT, CLEANER_PROMPT, CHIEF_PROMPT, VALUATION_PROMPT
-from core.config import Config
-import streamlit as st
-from agents.intent_parser import parse_user_input
+from src.tools.finance_tool import get_detailed_finance, get_growth_metrics, calculate_intrinsic_dcf, get_macro_rates, get_advanced_metrics
+from src.tools.news_tool import get_real_market_data
+from src.agents.state import AgentState
+from src.agents.prompts import BULL_PROMPT, BEAR_PROMPT, CLEANER_PROMPT, CHIEF_PROMPT, VALUATION_PROMPT
+from src.core.config import Config
+from src.agents.intent_parser import parse_user_input
 
 def intent_node(state: AgentState):
 
@@ -103,13 +102,12 @@ def valuation_expert(state: AgentState):
     return {"valuation_data": dcf_results}
 
 # 获取当前 UI 中配置的模型（如果没有则使用默认值）
-def get_configured_model(role_type: str):
-    if "model_config" in st.session_state:
-        return st.session_state.model_config.get(role_type, "qwen3.5-flash")
-    return "qwen3.5-flash"  # 默认模型
+def get_configured_model(state: AgentState, role_type: str):
+    # 从状态中读取，如果没有则给兜底默认值
+    return state.get("model_config", {}).get(role_type, "qwen3.5-flash")
 
 def bull_analyst(state: AgentState):
-    model_name = get_configured_model("debate_model")
+    model_name = get_configured_model(state, "debate_model")
     llm = Config.get_llm(temperature=0.7, model_name=model_name)
     chain = BULL_PROMPT | llm
     res = chain.invoke({
@@ -122,7 +120,7 @@ def bull_analyst(state: AgentState):
     return {"bull_thesis": res.content}
 
 def bear_analyst(state: AgentState):
-    model_name = get_configured_model("debate_model")
+    model_name = get_configured_model(state, "debate_model")
     llm = Config.get_llm(temperature=0.6, model_name=model_name)
     chain = BEAR_PROMPT | llm
     res = chain.invoke({
@@ -135,7 +133,7 @@ def bear_analyst(state: AgentState):
     return {"bear_thesis": res.content}
 
 def chief_analyst_synthesis(state: AgentState):
-    model_name = get_configured_model("chief_model")
+    model_name = get_configured_model(state, "chief_model")
     llm = Config.get_llm(temperature=0.3, model_name=model_name)
     chain = CHIEF_PROMPT | llm
     res = chain.invoke({
