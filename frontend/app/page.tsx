@@ -5,28 +5,47 @@ import ReactMarkdown from 'react-markdown';
 import { 
   Search, TrendingUp, TrendingDown, Activity, 
   Briefcase, Scale, BrainCircuit, Loader2, AlertCircle,
-  SlidersHorizontal
+  SlidersHorizontal, DollarSign
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- 类型定义 ---
+interface ValuationData {
+  selected_method?: string;   // 路由选择的模型名称
+  reasoning?: string;         // 模型选择逻辑
+  intrinsic_value?: number;   // 估算出来的合理价格
+  current_price?: number;     // 现价（由后端或前端补齐）
+  verdict?: string;           // 结论：高估/合理/低估
+  key_metrics?: Record<string, any>; // 动态参数对，如 {"G": "15%", "WACC": "8%"}
+}
+
 interface AgentState {
   ticker?: string;
   investment_horizon?: string;
   user_concerns?: string;
   sector?: string;
+  valuation_data?: ValuationData;
   bull_thesis?: string;
   bear_thesis?: string;
   final_report?: string;
 }
 
-const AGENT_STEPS = [
-  { id: 'intent_analyzer', label: '意图解析', icon: BrainCircuit },
-  { id: 'macro', label: '宏观调研', icon: Activity },
-  { id: 'fundamental', label: '基本面分析', icon: Briefcase },
-  { id: 'bull_expert', label: '多头建构', icon: TrendingUp, color: 'text-emerald-500' },
-  { id: 'bear_expert', label: '空头建构', icon: TrendingDown, color: 'text-rose-500' },
-  { id: 'chief', label: '首席总管综合', icon: Scale, color: 'text-blue-400' }
+const STAGE_GROUPS = [
+  [{ id: 'intent_analyzer', label: '意图解析', icon: BrainCircuit }], 
+  
+  [ 
+    { id: 'macro', label: '宏观调研', icon: Activity },
+    { id: 'fundamental', label: '基本面分析', icon: Briefcase }
+  ],
+  
+  [{ id: 'valuation', label: '智能估值', icon: DollarSign, color: 'text-amber-400' }],
+  
+  [ 
+    { id: 'bull_expert', label: '多头建构', icon: TrendingUp, color: 'text-emerald-500' },
+    { id: 'bear_expert', label: '空头建构', icon: TrendingDown, color: 'text-rose-500' }
+  ],
+  
+  [{ id: 'chief', label: '首席总管', icon: Scale, color: 'text-blue-400' }] 
 ];
 
 // 可选的模型列表
@@ -42,6 +61,8 @@ export default function FinanceTerminal() {
   const [error, setError] = useState<string | null>(null);
   
   // --- 新增：模型配置状态 ---
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [currentNode, setCurrentNode] = useState<string>('');
   const [showConfig, setShowConfig] = useState(false);
   const [debateModel, setDebateModel] = useState('qwen3.5-flash');
   const [chiefModel, setChiefModel] = useState('qwen3.5-flash');
@@ -54,14 +75,13 @@ export default function FinanceTerminal() {
   // 滚动锚点
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  const handleAnalyze = async (e: React.FormEvent) => {
+const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) return;
 
-    // 重置状态
     setIsAnalyzing(true);
     setError(null);
-    setActiveNodes(['intent_analyzer']);
+    setActiveNodes([]);
     setCompletedNodes([]);
     setAgentData({});
 
@@ -82,44 +102,66 @@ export default function FinanceTerminal() {
       if (!response.body) throw new Error('流获取失败');
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder('utf-8');
+      
+      // 🛡️ 引入 buffer 解决流式截断问题
       let buffer = '';
 
       while (true) {
+        // stream: true 保证多字节字符不会乱码
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6);
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const message = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2); // 移除已处理的消息
+
+          if (message.startsWith('data: ')) {
+            const jsonStr = message.replace('data: ', '');
             try {
-              const payload = JSON.parse(jsonStr);
+              const data = JSON.parse(jsonStr);
 
-              if (payload.node === 'ERROR') {
-                throw new Error(payload.message);
+              if (data.node === 'DONE') {
+                setIsLoading(false);
+                setCurrentNode('');
+              } else if (data.node === 'ERROR') {
+                setError(data.message);
+                setIsLoading(false);
+              } else if (data.type === 'node_start') {
+                setActiveNodes(prev => Array.from(new Set([...prev, data.node])));
+              } else if (data.type === 'token') {
+                setAgentData(prev => {
+                  const keyMap: Record<string, keyof AgentState> = {
+                    'bull_expert': 'bull_thesis',
+                    'bear_expert': 'bear_thesis',
+                    'chief': 'final_report'
+                  };
+                  const stateKey = keyMap[data.node];
+                  if (!stateKey) return prev;
+                  
+                  return {
+                    ...prev,
+                    [stateKey]: (prev[stateKey] || '') + data.chunk
+                  };
+                });
+                setCurrentNode(data.node);
+              } else if (data.type === 'state') {
+                // 📦 节点跑完的完整状态更新
+                if (data.state) {
+                  setAgentData(prev => ({ ...prev, ...data.state }));
+                  setCompletedNodes(prev => Array.from(new Set([...prev, data.node])));
+                  setActiveNodes(prev => prev.filter(n => n !== data.node));
+                }
               }
-
-              if (payload.node === 'DONE') {
-                setIsAnalyzing(false);
-                setActiveNodes([]);
-                setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth' }), 500);
-                continue;
-              }
-
-              setCompletedNodes(prev => [...new Set([...prev, payload.node])]);
-              
-              if (payload.state) {
-                setAgentData(prev => ({ ...prev, ...payload.state }));
-              }
-              
-            } catch (err) {
-              console.error('解析流数据失败:', err, jsonStr);
+            } catch (e) {
+              // 吞掉由于极端截断导致的临时 JSON 错误，等待下一次 buffer 拼接
+              console.warn("JSON Parse skipped temporarily:", jsonStr);
             }
           }
+          // 检查是否还有完整的消息
+          boundary = buffer.indexOf('\n\n');
         }
       }
     } catch (err: any) {
@@ -248,36 +290,45 @@ export default function FinanceTerminal() {
           )}
         </div>
 
-        {/* --- 下方的进度条与 Markdown 渲染区保持不变 --- */}
-        {/* 为了简洁，此处省略下方动态进度条与报告渲染的代码，保留上个版本的逻辑即可 */}
         {(isAnalyzing || completedNodes.length > 0) && (
           <motion.div 
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            className="mb-12 bg-[#121214] border border-white/5 rounded-2xl p-6 shadow-xl"
+            className="mb-12 bg-[#121214] border border-white/5 rounded-2xl p-6 shadow-xl overflow-x-auto"
           >
-            <div className="flex justify-between items-center relative">
-              <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-0.5 bg-slate-800 -z-10" />
-              {AGENT_STEPS.map((step, index) => {
-                const isCompleted = completedNodes.includes(step.id);
-                const isActive = activeNodes.includes(step.id) || (isAnalyzing && !isCompleted && completedNodes.length === index);
-                
-                return (
-                  <div key={step.id} className="flex flex-col items-center gap-3 bg-[#121214] px-4">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-500 ${
-                      isCompleted 
-                        ? 'bg-blue-500/20 border-blue-500 text-blue-400' 
-                        : isActive 
-                        ? 'bg-slate-800 border-slate-500 text-white shadow-[0_0_15px_rgba(255,255,255,0.2)]' 
-                        : 'bg-slate-900 border-slate-800 text-slate-600'
-                    }`}>
-                      {isActive ? <Loader2 className="w-5 h-5 animate-spin" /> : <step.icon className={`w-5 h-5 ${isCompleted ? step.color : ''}`} />}
-                    </div>
-                    <span className={`text-xs font-medium tracking-wide ${isCompleted || isActive ? 'text-slate-300' : 'text-slate-600'}`}>
-                      {step.label}
-                    </span>
-                  </div>
-                );
-              })}
+            {/* 使用 Graph 拓扑布局体现并行 */}
+            <div className="flex justify-between items-center relative min-w-[600px] py-4">
+              {/* 贯穿全局的背景连线 */}
+              <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-0.5 bg-slate-800 -z-10" />
+              
+              {STAGE_GROUPS.map((group, groupIdx) => (
+                <div key={groupIdx} className="flex flex-col gap-6 relative z-10 bg-[#121214] py-2 px-1">
+                  {group.map(step => {
+                    const isCompleted = completedNodes.includes(step.id);
+                    const isActive = activeNodes.includes(step.id);
+                    
+                    return (
+                      <div key={step.id} className="flex flex-col items-center gap-2">
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                          isCompleted 
+                            ? 'bg-blue-500/20 border-blue-500 text-blue-400' 
+                            : isActive 
+                            ? 'bg-slate-800 border-blue-400 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)] scale-110' 
+                            : 'bg-slate-900 border-slate-800 text-slate-600'
+                        }`}>
+                          {isActive ? (
+                            <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                          ) : (
+                            <step.icon className={`w-5 h-5 ${isCompleted ? step.color : ''}`} />
+                          )}
+                        </div>
+                        <span className={`text-[11px] font-medium tracking-wide whitespace-nowrap ${isCompleted || isActive ? 'text-slate-300' : 'text-slate-600'}`}>
+                          {step.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </motion.div>
         )}
@@ -306,7 +357,80 @@ export default function FinanceTerminal() {
                )}
              </div>
 
-             {/* 多空博弈区 (仅当双方都有数据时显示) */}
+              {/* 智能估值卡片 */}
+              {agentData.valuation_data && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                  className="bg-[#18181b] border border-amber-900/30 rounded-2xl overflow-hidden shadow-xl"
+                >
+                  <div className="bg-amber-900/20 px-6 py-4 border-b border-amber-900/30 flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="w-5 h-5 text-amber-400" />
+                      <h3 className="text-lg font-semibold text-white">
+                        智能估值分析 <span className="text-sm font-normal text-amber-400/60 ml-2">[{agentData.valuation_data.selected_method}]</span>
+                      </h3>
+                    </div>
+                    {/* 结论勋章 */}
+                    <div className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                      agentData.valuation_data.verdict?.includes('低估') ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
+                      agentData.valuation_data.verdict?.includes('高估') ? 'bg-rose-500/10 border-rose-500/50 text-rose-400' :
+                      'bg-blue-500/10 border-blue-500/50 text-blue-400'
+                    }`}>
+                      {agentData.valuation_data.verdict}
+                    </div>
+                  </div>
+
+                  <div className="p-6">
+                    {/* 模型选择理由 */}
+                    <div className="mb-6 p-4 bg-amber-900/10 border-l-4 border-amber-500/50 rounded-r-lg">
+                      <p className="text-sm text-amber-100/80 italic">
+                        <span className="font-bold text-amber-400">路由决策：</span>
+                        {agentData.valuation_data.reasoning}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {/* 左侧：核心指标动态列表 */}
+                      <div>
+                        <h4 className="text-sm font-medium text-slate-400 mb-4 uppercase tracking-wider">关键估值参数</h4>
+                        <div className="space-y-3">
+                          {Object.entries(agentData.valuation_data.key_metrics || {}).map(([key, value]) => (
+                            <div key={key} className="flex justify-between items-center border-b border-slate-800 pb-2">
+                              <span className="text-slate-400 text-sm">{key}</span>
+                              <span className="text-white font-mono font-medium">{String(value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 右侧：价格对比可视化 */}
+                      <div className="flex flex-col justify-center items-center p-6 bg-slate-900/50 rounded-xl border border-slate-800">
+                        <div className="text-sm text-slate-400 mb-2">估算内在价值 (Intrinsic Value)</div>
+                        <div className="text-4xl font-bold text-amber-400 mb-4">
+                          ${agentData.valuation_data.intrinsic_value?.toFixed(2)}
+                        </div>
+                        
+                        <div className="w-full space-y-2">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">当前价: ${agentData.valuation_data.current_price || '--'}</span>
+                            <span className={agentData.valuation_data.intrinsic_value! > (agentData.valuation_data.current_price || 0) ? 'text-emerald-400' : 'text-rose-400'}>
+                              空间: {(((agentData.valuation_data.intrinsic_value! / (agentData.valuation_data.current_price || 1)) - 1) * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                          {/* 简易进度条模拟溢价/折价 */}
+                          <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: '70%' }} // 这里可以根据现价和估价的比例动态计算
+                              className={`h-full ${agentData.valuation_data.intrinsic_value! > (agentData.valuation_data.current_price || 0) ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
              {(agentData.bull_thesis || agentData.bear_thesis) && (
                <div className="grid md:grid-cols-2 gap-6">
                  {/* 多头报告 */}

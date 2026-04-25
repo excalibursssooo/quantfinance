@@ -1,77 +1,112 @@
+# 📈 QuantFinance AI Agent
+
+> **An intelligent, multi-agent quantitative finance analysis platform driven by LLMs and LangGraph.**
+
+QuantFinance AI Agent is a full-stack application that simulates a Wall Street Investment Committee. By orchestrating multiple specialized AI "experts" (Macro Analyst, Fundamental Analyst, Valuation Expert, Bull/Bear Debaters, and a Chief Investment Officer), it transforms a simple user query into a comprehensive, data-driven, and objectively balanced investment research report.
 
 ---
 
-# 📈 Quantfin-Oracle: 多智能体投研系统
+## ✨ Key Features
 
-**Quantfin-Oracle** 是一款基于 **LangGraph** 和 **LLM** 构建的深度股票分析系统。它不仅模拟了华尔街投行分析师的工作流，更引入了**自动熔断机制**与**人工干预控制**，确保在波动的 API 环境下依然保持极高的系统稳定性。
-
----
-
-## 🌟 核心亮点
-
-- **并行专家流 (Parallel Multi-Agent)**：采用 Fan-out/Fan-in 设计，宏观、财务、估值、情绪四个维度同步调研。
-- **工业级容错 (Circuit Breaker)**：引入全局异常捕获机制，任何节点（API 超时、格式错误）出错均会即时触发系统熔断，防止无效计算消耗 Token。
-- **动态 DCF 建模**：实时抓取十年期美债收益率（^TNX）作为无风险利率，结合 CAPM 模型动态推导 WACC。
+* **🧠 Multi-Agent Orchestration:** Powered by LangGraph, the system executes a complex DAG (Directed Acyclic Graph) workflow. It parses intent, parallelizes data gathering, debates theses, and synthesizes a final verdict.
+* **📊 Real-Time Market Data:** Integrates `yfinance` and `Tavily` search to pull real-time stock data, historical financials, macro-economic indicators, and sentiment news.
+* **🧮 Dynamic Valuation Modeling:** Automatically selects and calculates the best valuation model (DCF, P/S, EV/EBITDA) based on company fundamentals, adjusting parameters like WACC, terminal growth rate, and equity risk premium dynamically.
+* **⚡ Streaming UI:** Utilizes Server-Sent Events (SSE) via FastAPI to stream the AI's thought process and stage completion status directly to a modern, responsive React (Next.js) frontend.
+* **⚔️ Red Teaming / Debate Framework:** Forces a structural debate between a "Bull Expert" (optimist) and a "Bear Expert" (pessimist) to eliminate bias before the Chief Investment Officer makes a final call.
 
 ---
 
-## 🏗️ 系统架构
+## 🏗️ System Architecture & Workflow
 
-系统遵循“意图识别 -> 调研 -> 熔断保护 -> 决策”的逻辑：
+The analysis pipeline strictly follows this lifecycle:
 
-
-1.  **Intent Parser**: 利用结构化输出识别 Ticker 和用户核心关切。
-2.  **Expert Nodes (Parallel)**:
-    * **Macro Analyst**: 调研美联储政策及行业宏观环境。
-    * **Fundamental Analyst**: 提取 CapEx、回购及 ROE 等高质量指标。
-    * **Valuation Expert**: 推导 DCF 参数并执行内在价值计算。
-    * **Sentiment Analyst**: 监控 13F 持仓与技术面情绪。
-    * **Bull and Bear**: 加入多空博弈，综合各方观点
-3.  **Circuit Breaker**: 全局监听 `app_graph.stream()`，捕获任何节点的 `ValidationError` 或 `APIError`。
-4.  **Chief Analyst**: 综合所有脱水数据，生成具备“机构感”的深度研报。
+1.  **Intent Parsing (`intent_analyzer`):** Extracts the target ticker, investment horizon, user concerns, and sector from natural language.
+2.  **Parallel Data Gathering:**
+    * `macro_analyst`: Fetches broad economic data and interest rates.
+    * `fundamental_analyst`: Extracts P/E, EPS, growth metrics, and capital allocation.
+    * `sentiment_analyst`: Analyzes recent news and market sentiment.
+3.  **Valuation (`valuation_expert`):** Calculates intrinsic value using mathematical models.
+4.  **Debate Phase:**
+    * `bull_expert`: Constructs the strongest possible buy thesis.
+    * `bear_expert`: Actively seeks flaws, risks, and constructs a sell thesis.
+5.  **Synthesis (`chief_analyst_synthesis`):** The CIO weighs all evidence, directly addresses user concerns, and outputs the final IC (Investment Committee) Report.
 
 ---
 
-## 🚀 快速开始
+## 📂 Project Structure
 
-### 1. 配置环境变量
-在 `.env` 文件中填入您的配置：
+### Backend (Python / AI Core)
+* **`src/agents/graph.py`**: The brain of the application. Defines the LangGraph state machine, nodes, and edges for the multi-agent workflow.
+* **`src/agents/state.py`**: Defines the `AgentState` TypedDict, acting as the shared memory/context passed between all AI nodes.
+* **`src/agents/prompts.py`**: Contains the highly engineered system prompts that give each AI expert its specific persona and task rules.
+* **`src/agents/intent_parser.py`**: Uses structured LLM outputs to cleanly parse chaotic user input into a JSON format.
+* **`src/tools/finance_tool.py`**: The quantitative engine. Interfaces with `yfinance` and contains mathematical tools for DCF calculation, historical returns, and metric extraction.
+* **`src/tools/news_tool.py`**: The qualitative engine. Dynamically generates search queries and fetches real-time market news using Tavily.
+* **`server.py`**: A FastAPI application that serves the LangGraph workflow via a `/api/analyze` endpoint. It uses SSE (Server-Sent Events) to stream real-time state updates to the frontend.
 
-```env
-OPENAI_API_KEY=sk-xxxx
-OPENAI_API_BASE_URL=https://api.openai.com/v1
-MODEL_NAME=qwen3.6-flash # 或 deepseek-v3.2, gpt-4o
-TAVILY_API_KEY=tvly-xxxx
-```
+### Frontend (React / Next.js)
+* **`page.tsx`**: The main user interface. Built with React, Tailwind CSS, and Framer Motion. It handles the SSE connection, displays real-time loading states for each agent, and renders the final markdown reports beautifully.
 
-### 2. 启动系统
+---
+
+## 💻 Tech Stack
+
+**Backend & AI:**
+* **Python 3.10+**
+* **LangChain & LangGraph:** For agent orchestration and LLM pipeline management.
+* **FastAPI:** High-performance web framework for the API and SSE streaming.
+* **Pydantic:** Data validation and structured output schema definition.
+* **yfinance & pandas:** Financial data fetching and manipulation.
+* **Tavily API:** Real-time web search for news and macro data.
+
+**Frontend:**
+* **React (Next.js):** UI framework.
+* **Tailwind CSS:** Utility-first styling.
+* **Framer Motion:** Smooth, physics-based animations for the UI loading states.
+* **Lucide React:** Beautiful, consistent iconography.
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+* Python 3.10+
+* Node.js 18+
+* API Keys for your chosen LLM (e.g., OpenAI/Anthropic) and Tavily Search.
+
+### 1. Backend Setup
 ```bash
-streamlit run app.py
+# Clone the repository and navigate to the backend directory
+cd backend
+
+# Create and activate a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+
+# Install dependencies
+pip install fastapi uvicorn langgraph langchain yfinance pandas pydantic retrying tavily-python
+
+# Set your environment variables (create a .env file)
+export OPENAI_API_KEY="your-api-key"
+export TAVILY_API_KEY="your-tavily-key"
+
+# Run the FastAPI server
+uvicorn server:app --reload --port 8000
 ```
 
----
+### 2. Frontend Setup
+```bash
+# Navigate to the frontend directory
+cd frontend
 
-## 📂 项目结构
+# Install dependencies
+npm install
 
-```text
-├── agents/
-│   ├── graph.py       # LangGraph 工作流编排（含 Fan-out 逻辑）
-│   ├── intent_parser.py # 强鲁棒性的意图解析器
-│   ├── state.py       # 系统 TypedDict 状态定义
-│   └── prompts.py     # 专家系统提示词
-├── core/
-│   └── config.py      # 模型与 API 统一配置中心
-|── tools/
-│   ├── finance_tool.py # YFinance 财务及 DCF 计算工具
-│   └── news_tool.py    # Tavily 实时搜索工具
-├── app.py             # 支持流式输出与紧急停止的 Streamlit 入口
-├── .env               # 环境变量
-└── requirements.txt   # 项目依赖
+# Run the development server
+npm run dev
 ```
 
----
-
-## ⚠️ 免责声明
-本系统生成的所有分析报告均由人工智能基于公开数据生成，不构成投资建议。**AI 可能会产生幻觉，请务必核实计算结果。**
-
----
+### 3. Usage
+1. Open `http://localhost:3000` in your browser.
+2. Enter a prompt like: *"I am considering buying NVDA for the long term, but I am worried about AI hardware market saturation. Should I invest?"*
+3. Watch the multi-agent system work in real-time as the UI lights up, and review the final Investment Committee report!
