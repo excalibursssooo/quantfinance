@@ -36,10 +36,10 @@ User Query
              │
     ┌────────┴────────┐
     ▼                  ▼
-┌─────────┐    ┌──────────────┐
-│context_ │    │ error_handler│  ← Melt circuit (data quality < 0.3)
-│ cleaner  │    └──────┬───────┘
-└────┬─────┘           │
+┌─────────┐     ┌──────────────┐
+│context_ │     │ error_handler│  ← Melt circuit (data quality < 0.3)
+│ cleaner │     └──────┬───────┘
+└────┬────┘            │
      ▼                 │
 ┌─────────┐            │
 │bull R1  │            │
@@ -79,7 +79,7 @@ User Query
 
 ### Adversarial Multi-Round Debate
 - **R1**: Bull constructs strongest buy thesis from cleaned context
-- **R2**: Bear counters with specific logic刺穿 (puncture attacks)
+- **R2**: Bear counters with specific logic attacks (puncture attacks)
 - **R3**: Bull rebuts with data-backed defense
 - Auditor then cross-examines the full debate history
 

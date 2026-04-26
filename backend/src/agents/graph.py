@@ -134,9 +134,12 @@ def valuation_expert(state: AgentState):
         }
 
     user_model = get_configured_model(state, "valuation")
-    fin = state.get("fundamental_data", {})
-    multiples = state.get("_valuation_multiples", {})
-    assumptions = state.get("_valuation_assumptions", {})
+    raw_fin = state.get("fundamental_data")
+    fin = raw_fin if isinstance(raw_fin, dict) else {}
+    raw_multiples = state.get("_valuation_multiples")
+    multiples = raw_multiples if isinstance(raw_multiples, dict) else {}
+    raw_assumptions = state.get("_valuation_assumptions")
+    assumptions = raw_assumptions if isinstance(raw_assumptions, dict) else {}
 
     current_price = fin.get("price", 0.0)
     shares = fin.get("shares_outstanding", 1)
@@ -281,14 +284,32 @@ def context_cleaner_node(state: AgentState):
     )
     try:
         res = llm.invoke(prompt)
+
+        if isinstance(res, dict):
+            macro_summary = res.get("macro_summary", "")
+            fundamental_snapshot = res.get("fundamental_snapshot", "")
+            sentiment_assessment = res.get("sentiment_assessment", "")
+            valuation_summary = res.get("valuation_summary", "")
+            key_catalysts = res.get("key_catalysts", [])
+            key_risks = res.get("key_risks", [])
+            investment_conclusion_short = res.get("investment_conclusion_short", "")
+        else:
+            macro_summary = getattr(res, "macro_summary", "")
+            fundamental_snapshot = getattr(res, "fundamental_snapshot", "")
+            sentiment_assessment = getattr(res, "sentiment_assessment", "")
+            valuation_summary = getattr(res, "valuation_summary", "")
+            key_catalysts = getattr(res, "key_catalysts", [])
+            key_risks = getattr(res, "key_risks", [])
+            investment_conclusion_short = getattr(res, "investment_conclusion_short", "")
+
         cleaned = (
-            f"## 宏观环境\n{res.macro_summary}\n\n"
-            f"## 基本面快照\n{res.fundamental_snapshot}\n\n"
-            f"## 情绪判断: {res.sentiment_assessment}\n\n"
-            f"## 估值摘要\n{res.valuation_summary}\n\n"
-            f"**催化剂:** {'；'.join(res.key_catalysts)}\n\n"
-            f"**风险:** {'；'.join(res.key_risks)}\n\n"
-            f"**一句话结论:** {res.investment_conclusion_short}"
+            f"## 宏观环境\n{macro_summary}\n\n"
+            f"## 基本面快照\n{fundamental_snapshot}\n\n"
+            f"## 情绪判断: {sentiment_assessment}\n\n"
+            f"## 估值摘要\n{valuation_summary}\n\n"
+            f"**催化剂:** {'；'.join(key_catalysts)}\n\n"
+            f"**风险:** {'；'.join(key_risks)}\n\n"
+            f"**一句话结论:** {investment_conclusion_short}"
         )
         return {"cleaned_context": cleaned}
     except Exception as e:
@@ -316,11 +337,23 @@ def logic_auditor(state: AgentState):
     估值结论: {state.get('valuation_data', {}).get('verdict')}
     """
     res = llm.invoke(audit_prompt)
+
+    if isinstance(res, dict):
+        verdict = res.get("verdict", "未生成")
+        logic_flaws = res.get("logic_flaws", [])
+        risk_warning = res.get("risk_warning", "未生成")
+        cross_examination = res.get("cross_examination", "未生成")
+    else:
+        verdict = getattr(res, "verdict", "未生成")
+        logic_flaws = getattr(res, "logic_flaws", [])
+        risk_warning = getattr(res, "risk_warning", "未生成")
+        cross_examination = getattr(res, "cross_examination", "未生成")
+
     report_parts = [
-        f"### 审计结论：{res.verdict}",
-        f"**逻辑漏洞：** {'，'.join(res.logic_flaws)}",
-        f"**风控警告：** {res.risk_warning}",
-        f"**交叉审查：** {res.cross_examination}",
+        f"### 审计结论：{verdict}",
+        f"**逻辑漏洞：** {'，'.join(logic_flaws)}",
+        f"**风控警告：** {risk_warning}",
+        f"**交叉审查：** {cross_examination}",
     ]
     return {"audit_report": "\n\n".join(report_parts)}
 
