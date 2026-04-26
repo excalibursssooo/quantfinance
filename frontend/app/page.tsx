@@ -31,6 +31,9 @@ interface AgentState {
   bear_thesis?: string;
   audit_report?: string; 
   final_report?: string;
+  _degraded?: boolean;
+  _data_quality?: number;
+  _data_warnings?: string[];
 }
 
 const STAGE_GROUPS = [
@@ -40,9 +43,11 @@ const STAGE_GROUPS = [
     { id: 'fundamental', label: '基本面分析', icon: Briefcase }
   ],
   [{ id: 'valuation', label: '估值建模', icon: SlidersHorizontal }],
+  [{ id: 'context_cleaner', label: '数据提炼', icon: Activity }],
   [
     { id: 'bull_expert', label: '多头逻辑', icon: TrendingUp },
-    { id: 'bear_expert', label: '空头逻辑', icon: TrendingDown },
+    { id: 'bear_counter', label: '空头反击', icon: TrendingDown },
+    { id: 'bull_rebuttal', label: '多头辩护', icon: TrendingUp },
   ],
   [{ id: 'auditor', label: '风控审计', icon: AlertCircle }],
   [{ id: 'chief', label: '终审决策', icon: Scale }]
@@ -317,9 +322,9 @@ export default function QuantAgentPage() {
               else if (eventData.type === 'token') {
                 setAgentData((prevData) => {
                   const newData = { ...prevData };
-                  if (eventData.node === 'bull_expert') {
+                  if (eventData.node === 'bull_expert' || eventData.node === 'bull_rebuttal') {
                     newData.bull_thesis = (newData.bull_thesis || '') + eventData.chunk;
-                  } else if (eventData.node === 'bear_expert') {
+                  } else if (eventData.node === 'bear_counter') {
                     newData.bear_thesis = (newData.bear_thesis || '') + eventData.chunk;
                   } else if (eventData.node === 'chief') {
                     newData.final_report = (newData.final_report || '') + eventData.chunk;
@@ -508,12 +513,28 @@ export default function QuantAgentPage() {
           
           {/* 基本信息 */}
           {agentData.ticker && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-4 mb-8">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-4 mb-2">
               <div className="px-4 py-2 bg-slate-800 rounded-lg border border-slate-700 font-mono text-blue-400 font-bold">
                 {agentData.ticker}
               </div>
               <div className="px-4 py-2 bg-slate-800 rounded-lg border border-slate-700 text-slate-300 text-sm flex items-center">
                 板块: {agentData.sector} | 周期: {agentData.investment_horizon}
+              </div>
+            </motion.div>
+          )}
+
+          {/* 数据质量警告（降级模式） */}
+          {agentData._degraded && (
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+              className="mb-4 p-4 bg-amber-900/30 border border-amber-600/50 rounded-xl flex items-start gap-3"
+            >
+              <AlertCircle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-amber-300 font-semibold text-sm">数据质量不足（评分: {agentData._data_quality}）</p>
+                <p className="text-amber-400/70 text-xs mt-1">
+                  {agentData._data_warnings?.join('；') || '关键财务数据缺失'}
+                </p>
+                <p className="text-amber-400/70 text-xs mt-1">已自动降级为纯定性分析模式，量化估值跳过。</p>
               </div>
             </motion.div>
           )}
@@ -535,9 +556,10 @@ export default function QuantAgentPage() {
                   量化估值模型 (Valuation Dashboard)
                   {agentData.valuation_data?.selected_method && (
                     <span className="px-2 py-1 bg-slate-700 text-slate-300 text-xs rounded border border-slate-600 font-normal">
-                      {agentData.valuation_data.selected_method === 'calculate_dcf' ? 'DCF 绝对估值法' : 
-                       agentData.valuation_data.selected_method === 'calculate_ps_valuation' ? 'P/S 相对估值法' : 
-                       agentData.valuation_data.selected_method === 'calculate_ev_ebitda' ? 'EV/EBITDA 乘数法' : '自定义模型'}
+                  {agentData.valuation_data.selected_method === 'calculate_dcf' ? 'DCF 绝对估值法' : 
+                        agentData.valuation_data.selected_method === 'calculate_ps_valuation' ? 'P/S 相对估值法' : 
+                        agentData.valuation_data.selected_method === 'calculate_ev_ebitda' ? 'EV/EBITDA 乘数法' : 
+                        agentData.valuation_data.selected_method === 'N/A' ? '已跳过（数据不足）' : '自定义模型'}
                     </span>
                   )}
                 </h3>

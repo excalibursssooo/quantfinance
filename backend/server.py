@@ -51,10 +51,12 @@ class AnalyzeRequest(BaseModel):
     thread_id: str = "default_user" # 允许前端传入 thread_id 以恢复记忆
     expert_configs: Optional[Dict[str, str]] = {}
 
-# 白名单：我们前端 UI 上定义的所有有效节点
+# 白名单：所有有效的 Agent 节点（包括对抗辩论）
 VALID_NODES = [
-    "intent_analyzer", "macro", "fundamental", "valuation", 
-    "bull_expert", "bear_expert", "auditor", "chief"
+    "intent_analyzer", "macro", "fundamental", "valuation",
+    "context_cleaner", "error_handler",
+    "bull_expert", "bear_counter", "bull_rebuttal",
+    "auditor", "chief"
 ]
 
 
@@ -123,7 +125,7 @@ async def analyze(request: AnalyzeRequest):
                 # 1. 【流式 Token 拦截】(打字机效果)
                 elif kind == "on_chat_model_stream":
                     chunk = event["data"]["chunk"].content
-                    if chunk and langgraph_node in ["bull_expert", "bear_expert", "chief"]:
+                    if chunk and langgraph_node in ["bull_expert", "bear_counter", "bull_rebuttal", "chief"]:
                         payload = json.dumps({
                             "type": "token",
                             "node": langgraph_node,
