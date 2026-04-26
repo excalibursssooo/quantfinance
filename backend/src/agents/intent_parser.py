@@ -9,13 +9,13 @@ class UserIntent(BaseModel):
     user_concerns: Union[str, List[str]] = Field(description="用户核心关切点")
     sector: str = Field(description="股票所属的粗略板块，如 Technology, Financial Services, Healthcare 等。用于后续专家路由。")
 
-def parse_user_input(user_text: str) -> dict:
+def parse_user_input(user_text: str, model_name: str = "qwen3.5-flash") -> dict:
     """
     将用户的自然语言输入转化为结构化的投研意图
     """
     # 意图解析不需要发散思维，temperature 设为 0 以保证稳定性
-    llm = Config.get_llm(temperature=0.0) 
-    
+    llm = Config.get_llm(temperature=0.0, model_name=model_name)
+
     # 强制 LLM 输出 UserIntent 结构
     structured_llm = llm.with_structured_output(UserIntent)
     

@@ -5,18 +5,19 @@ import ReactMarkdown from 'react-markdown';
 import { 
   Search, TrendingUp, TrendingDown, Activity, 
   Briefcase, Scale, BrainCircuit, Loader2, AlertCircle,
-  SlidersHorizontal, DollarSign
+  SlidersHorizontal, DollarSign, Download // 确保有 DollarSign
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- 类型定义 ---
 interface ValuationData {
-  selected_method?: string;   // 路由选择的模型名称
-  reasoning?: string;         // 模型选择逻辑
-  intrinsic_value?: number;   // 估算出来的合理价格
-  current_price?: number;     // 现价（由后端或前端补齐）
-  verdict?: string;           // 结论：高估/合理/低估
-  key_metrics?: Record<string, any>; // 动态参数对，如 {"G": "15%", "WACC": "8%"}
+  selected_method?: string;
+  reasoning?: string;
+  intrinsic_value?: number;
+  current_price?: number;
+  verdict?: string;
+  key_metrics?: Record<string, any>;
+  sensitivity?: Record<string, number>;
 }
 
 interface AgentState {
@@ -25,469 +26,646 @@ interface AgentState {
   user_concerns?: string;
   sector?: string;
   valuation_data?: ValuationData;
+  var_data?: Record<string, any>; 
   bull_thesis?: string;
   bear_thesis?: string;
+  audit_report?: string; 
   final_report?: string;
 }
 
 const STAGE_GROUPS = [
   [{ id: 'intent_analyzer', label: '意图解析', icon: BrainCircuit }], 
-  
   [ 
     { id: 'macro', label: '宏观调研', icon: Activity },
     { id: 'fundamental', label: '基本面分析', icon: Briefcase }
   ],
-  
-  [{ id: 'valuation', label: '智能估值', icon: DollarSign, color: 'text-amber-400' }],
-  
-  [ 
-    { id: 'bull_expert', label: '多头建构', icon: TrendingUp, color: 'text-emerald-500' },
-    { id: 'bear_expert', label: '空头建构', icon: TrendingDown, color: 'text-rose-500' }
+  [{ id: 'valuation', label: '估值建模', icon: SlidersHorizontal }],
+  [
+    { id: 'bull_expert', label: '多头逻辑', icon: TrendingUp },
+    { id: 'bear_expert', label: '空头逻辑', icon: TrendingDown },
   ],
-  
-  [{ id: 'chief', label: '首席总管', icon: Scale, color: 'text-blue-400' }] 
+  [{ id: 'auditor', label: '风控审计', icon: AlertCircle }],
+  [{ id: 'chief', label: '终审决策', icon: Scale }]
 ];
 
-// 可选的模型列表
-const AVAILABLE_MODELS = [
-  { id: 'qwen3.5-flash', name: 'Qwen 3.5 Flash (默认/高速)' },
-  { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash (深度推理)' },
-  { id: 'deepseek-v3.2', name: 'DeepSeek V3.2 (高性价比)' }
-];
+// --- 交互式估值微调组件 (动态适配不同估值方法) ---
+const InteractiveValuation = ({ 
+  initialData, 
+  threadId, 
+  onConfirm 
+}: { 
+  initialData: ValuationData, 
+  threadId: string, 
+  onConfirm: () => void 
+}) => {
+  const method = initialData?.selected_method || 'calculate_dcf';
+  const metrics = initialData?.key_metrics || {};
 
-export default function FinanceTerminal() {
-  const [prompt, setPrompt] = useState('');
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // 1. DCF 参数状态
+  const [wacc, setWacc] = useState<number>(Number(metrics.wacc || 0.1));
+  const [tg, setTg] = useState<number>(Number(metrics.tg || 0.02));
   
-  // --- 新增：模型配置状态 ---
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [currentNode, setCurrentNode] = useState<string>('');
-  const [showConfig, setShowConfig] = useState(false);
-  const [debateModel, setDebateModel] = useState('qwen3.5-flash');
-  const [chiefModel, setChiefModel] = useState('qwen3.5-flash');
+  // 2. P/S 参数状态
+  const [targetPs, setTargetPs] = useState<number>(Number(metrics.target_ps || 5.0));
   
-  // 状态流转追踪
-  const [activeNodes, setActiveNodes] = useState<string[]>([]);
-  const [completedNodes, setCompletedNodes] = useState<string[]>([]);
-  const [agentData, setAgentData] = useState<AgentState>({});
+  // 3. EV/EBITDA 参数状态
+  const [targetEvEbitda, setTargetEvEbitda] = useState<number>(Number(metrics.target_ev_ebitda || 15.0));
 
-  // 滚动锚点
-  const resultsRef = useRef<HTMLDivElement>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-const handleAnalyze = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!prompt.trim()) return;
+  const handleConfirm = async () => {
+    setIsSubmitting(true);
+    let feedbackPayload = {};
 
-    setIsAnalyzing(true);
-    setError(null);
-    setActiveNodes([]);
-    setCompletedNodes([]);
-    setAgentData({});
+    // 动态构造后端需要的 Payload
+    if (method === 'calculate_dcf') {
+      feedbackPayload = { wacc, tg };
+    } else if (method === 'calculate_ps_valuation') {
+      feedbackPayload = { target_ps: targetPs };
+    } else if (method === 'calculate_ev_ebitda') {
+      feedbackPayload = { target_ev_ebitda: targetEvEbitda };
+    }
 
     try {
-      const response = await fetch('http://localhost:5000/api/analyze', {
+      await fetch(`http://localhost:8000/api/feedback?thread_id=${threadId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          prompt, 
-          // --- 新增：将前端的配置注入到 payload 中 ---
-          model_config: { 
-            debate_model: debateModel, 
-            chief_model: chiefModel 
-          } 
-        }),
+        body: JSON.stringify(feedbackPayload)
       });
-
-      if (!response.body) throw new Error('流获取失败');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      
-      // 🛡️ 引入 buffer 解决流式截断问题
-      let buffer = '';
-
-      while (true) {
-        // stream: true 保证多字节字符不会乱码
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let boundary = buffer.indexOf('\n\n');
-        while (boundary !== -1) {
-          const message = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2); // 移除已处理的消息
-
-          if (message.startsWith('data: ')) {
-            const jsonStr = message.replace('data: ', '');
-            try {
-              const data = JSON.parse(jsonStr);
-
-              if (data.node === 'DONE') {
-                setIsLoading(false);
-                setCurrentNode('');
-              } else if (data.node === 'ERROR') {
-                setError(data.message);
-                setIsLoading(false);
-              } else if (data.type === 'node_start') {
-                setActiveNodes(prev => Array.from(new Set([...prev, data.node])));
-              } else if (data.type === 'token') {
-                setAgentData(prev => {
-                  const keyMap: Record<string, keyof AgentState> = {
-                    'bull_expert': 'bull_thesis',
-                    'bear_expert': 'bear_thesis',
-                    'chief': 'final_report'
-                  };
-                  const stateKey = keyMap[data.node];
-                  if (!stateKey) return prev;
-                  
-                  return {
-                    ...prev,
-                    [stateKey]: (prev[stateKey] || '') + data.chunk
-                  };
-                });
-                setCurrentNode(data.node);
-              } else if (data.type === 'state') {
-                // 📦 节点跑完的完整状态更新
-                if (data.state) {
-                  setAgentData(prev => ({ ...prev, ...data.state }));
-                  setCompletedNodes(prev => Array.from(new Set([...prev, data.node])));
-                  setActiveNodes(prev => prev.filter(n => n !== data.node));
-                }
-              }
-            } catch (e) {
-              // 吞掉由于极端截断导致的临时 JSON 错误，等待下一次 buffer 拼接
-              console.warn("JSON Parse skipped temporarily:", jsonStr);
-            }
-          }
-          // 检查是否还有完整的消息
-          boundary = buffer.indexOf('\n\n');
-        }
-      }
-    } catch (err: any) {
-      setError(err.message || '分析过程中发生未知错误');
-      setIsAnalyzing(false);
-      setActiveNodes([]);
+      onConfirm(); 
+    } catch (e) {
+      console.error("提交参数微调失败", e);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0b] text-slate-300 font-sans selection:bg-blue-500/30">
-      {/* 顶部导航 */}
-      <header className="border-b border-white/10 bg-[#121214] px-6 py-4 sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-blue-600/20 rounded-lg border border-blue-500/30">
-              <Scale className="w-6 h-6 text-blue-400" />
+    <div className="mt-8 p-6 bg-slate-800/80 border border-blue-500/40 rounded-xl shadow-lg">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-blue-500/20 rounded-lg"><SlidersHorizontal className="w-5 h-5 text-blue-400" /></div>
+          <h3 className="text-xl font-bold text-white">
+            CIO 审查与参数微调
+            <span className="ml-3 text-sm font-normal text-slate-400">
+              ({method === 'calculate_dcf' ? 'DCF 贴现模型' : method === 'calculate_ps_valuation' ? 'P/S 乘数模型' : 'EV/EBITDA 估值'})
+            </span>
+          </h3>
+        </div>
+        <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 text-xs rounded-full border border-yellow-500/30">
+          Agent 已挂起等待指示
+        </span>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* --- DCF 专属输入框 --- */}
+        {method === 'calculate_dcf' && (
+          <>
+            <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+              <label className="flex justify-between text-sm text-slate-300 mb-2 font-medium">
+                <span>贴现率 (WACC)</span>
+                <span className="font-mono text-blue-400">{(wacc * 100).toFixed(1)}%</span>
+              </label>
+              <input 
+                type="number" step="0.005" 
+                value={wacc} onChange={(e) => setWacc(Number(e.target.value))}
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+              />
             </div>
-            <h1 className="text-xl font-bold tracking-wider text-white">
-              AI QUANT <span className="text-blue-500">TERMINAL</span>
-            </h1>
+            
+            <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+              <label className="flex justify-between text-sm text-slate-300 mb-2 font-medium">
+                <span>永续增长率 (Terminal Growth)</span>
+                <span className="font-mono text-blue-400">{(tg * 100).toFixed(1)}%</span>
+              </label>
+              <input 
+                type="number" step="0.001" 
+                value={tg} onChange={(e) => setTg(Number(e.target.value))}
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </>
+        )}
+
+        {/* --- P/S 专属输入框 --- */}
+        {method === 'calculate_ps_valuation' && (
+          <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+            <label className="flex justify-between text-sm text-slate-300 mb-2 font-medium">
+              <span>目标市销率 (Target P/S 倍数)</span>
+              <span className="font-mono text-blue-400">{targetPs.toFixed(1)}x</span>
+            </label>
+            <input 
+              type="number" step="0.1" 
+              value={targetPs} onChange={(e) => setTargetPs(Number(e.target.value))}
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+            />
           </div>
-          <div className="text-xs text-slate-500 uppercase tracking-widest font-mono">
-            Multi-Agent Analysis Engine v2.0
+        )}
+
+        {/* --- EV/EBITDA 专属输入框 --- */}
+        {method === 'calculate_ev_ebitda' && (
+          <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+            <label className="flex justify-between text-sm text-slate-300 mb-2 font-medium">
+              <span>目标 EV/EBITDA 倍数</span>
+              <span className="font-mono text-blue-400">{targetEvEbitda.toFixed(1)}x</span>
+            </label>
+            <input 
+              type="number" step="0.1" 
+              value={targetEvEbitda} onChange={(e) => setTargetEvEbitda(Number(e.target.value))}
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 flex flex-col sm:flex-row items-center justify-end">
+        <button 
+          onClick={handleConfirm}
+          disabled={isSubmitting}
+          className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition-all disabled:opacity-50 flex items-center gap-2"
+        >
+          {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Scale className="w-5 h-5" />}
+          {isSubmitting ? '正在计算并生成研报...' : '确认参数并生成终版研报'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+
+export default function QuantAgentPage() {
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [activeNode, setActiveNode] = useState<string | null>(null);
+  const [agentData, setAgentData] = useState<AgentState>({});
+  const [completedNodes, setCompletedNodes] = useState<Set<string>>(new Set());
+  
+  const [threadId, setThreadId] = useState<string>('');
+  const [isWaitingFeedback, setIsWaitingFeedback] = useState<boolean>(false);
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  const exportToPDF = async () => {
+    if (!reportRef.current) return;
+    
+    // 增加一个简单的加载提示反馈
+    const originalText = reportRef.current.style.opacity;
+    reportRef.current.style.opacity = '0.7'; 
+    
+    try {
+      // 动态导入，避免 Next.js 服务端渲染报错
+      const { toPng } = await import('html-to-image');
+      const { jsPDF } = await import('jspdf');
+
+      const element = reportRef.current;
+
+      // 1. 将 DOM 转换为高清 PNG 图片 (原生支持所有现代 CSS)
+      const dataUrl = await toPng(element, { 
+        quality: 1.0,
+        pixelRatio: 2, // 提高 PDF 清晰度
+        backgroundColor: '#141416' // 强制填充暗色背景，防止透明
+      });
+
+      // 2. 实例化 PDF (A4 纸张)
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: 'a4'
+      });
+
+      // 3. 计算图片在 A4 纸上的比例
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      // 根据 DOM 实际宽高比算出 PDF 里的高度
+      const pdfHeight = (element.offsetHeight * pdfWidth) / element.offsetWidth;
+
+      // 4. 将图片写入 PDF 并保存
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Quant_Research_${agentData.ticker || 'Report'}.pdf`);
+      
+    } catch (error) {
+      console.error("PDF 导出失败", error);
+      alert("PDF 导出失败，请检查控制台。");
+    } finally {
+      // 恢复 UI 状态
+      if (reportRef.current) {
+        reportRef.current.style.opacity = originalText;
+      }
+    }
+  };
+
+  const [nodeModels, setNodeModels] = useState({
+    intent: 'qwen3.5-flash',      
+    valuation: 'qwen3.6-flash',          
+    debate_model: 'qwen3.6-flash',   
+    chief_model: 'qwen3.6-flash' 
+  });
+  const [showModelSettings, setShowModelSettings] = useState(false);
+
+  const AVAILABLE_MODELS = [
+    { value: 'qwen3.5-flash', label: 'Qwen 3.5 Flash (快速/便宜)' },
+    { value: 'qwen3.6-flash', label: 'Qwen 3.6 Flash (全能/逻辑强)' },
+    { value: 'claude-3-5-sonnet-20240620', label: 'Claude 3.5 (排版/深度思考)' },
+    { value: 'deepseek-v4-flash', label: 'DeepSeek V4 (高性价比)' }
+  ];
+
+  const handleAnalyze = async (existingThreadId?: string) => {
+    if (!input.trim() && !existingThreadId) return;
+    setIsLoading(true);
+    setIsWaitingFeedback(false);
+
+    if (!existingThreadId) {
+      setAgentData({});
+      setCompletedNodes(new Set());
+      setActiveNode('intent_analyzer');
+    }
+
+    const currentThreadId = existingThreadId || `thread_${Date.now()}`;
+    setThreadId(currentThreadId);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          prompt: input,
+          thread_id: currentThreadId,
+          expert_configs: nodeModels,
+        }),
+      });
+
+      if (!response.body) throw new Error("No response body");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.replace('data: ', '').trim();
+            if (!dataStr) continue;
+
+            try {
+              const eventData = JSON.parse(dataStr);
+
+              if (eventData.type === 'node_start') {
+                setActiveNode(eventData.node);
+              } 
+              else if (eventData.type === 'token') {
+                setAgentData((prevData) => {
+                  const newData = { ...prevData };
+                  if (eventData.node === 'bull_expert') {
+                    newData.bull_thesis = (newData.bull_thesis || '') + eventData.chunk;
+                  } else if (eventData.node === 'bear_expert') {
+                    newData.bear_thesis = (newData.bear_thesis || '') + eventData.chunk;
+                  } else if (eventData.node === 'chief') {
+                    newData.final_report = (newData.final_report || '') + eventData.chunk;
+                  }
+                  return newData;
+                });
+              } 
+              else if (eventData.type === 'state') {
+                setAgentData((prevData) => ({
+                  ...prevData,
+                  ...eventData.state 
+                }));
+                setCompletedNodes(prev => new Set(prev).add(eventData.node));
+              }
+              else if (eventData.type === 'pause' || eventData.node === 'PAUSED') {
+                setIsWaitingFeedback(true); 
+                setIsLoading(false);        
+                setActiveNode(null);        
+              } 
+              else if (eventData.node === 'DONE') {
+                setIsLoading(false);
+                setActiveNode(null);
+              } else if (eventData.type === 'error') {
+                console.error("Agent Error:", eventData.message);
+                setIsLoading(false);
+                setActiveNode(null);
+              }
+
+            } catch (err) {
+              console.error("解析 SSE 数据失败:", err, dataStr);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Failed to analyze:", error);
+      setIsLoading(false);
+      setActiveNode(null);
+    }
+  };
+
+  const handleResumeAfterFeedback = () => {
+    handleAnalyze(threadId);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-blue-500/30">
+      
+      {/* 头部区域 */}
+      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-blue-600 p-2 rounded-lg">
+              <Activity className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-white tracking-tight">QuantFinance AI</h1>
+              <p className="text-xs text-slate-400">Professional Agentic Workflow</p>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-12">
-        {/* 搜索输入区 */}
-        <div className="max-w-3xl mx-auto mb-16">
-          <form onSubmit={handleAnalyze} className="relative group z-20">
-            <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-2xl blur-xl transition-all group-hover:blur-2xl opacity-50"></div>
-            <div className="relative flex items-center bg-[#18181b] border border-white/10 rounded-2xl p-2 shadow-2xl focus-within:border-blue-500/50 transition-colors">
-              <Search className="w-6 h-6 text-slate-400 ml-4" />
-              <input
-                type="text"
-                className="w-full bg-transparent border-none outline-none px-4 py-4 text-lg text-white placeholder-slate-600"
-                placeholder="输入你想分析的股票及关切... (例：深度分析 NVDA)"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                disabled={isAnalyzing}
-              />
-              
-              {/* 设置按钮 */}
-              <button
-                type="button"
-                onClick={() => setShowConfig(!showConfig)}
-                className={`p-3 mr-2 rounded-xl transition-colors ${showConfig ? 'bg-blue-500/20 text-blue-400' : 'text-slate-400 hover:bg-slate-800'}`}
-                title="配置模型"
-              >
-                <SlidersHorizontal className="w-5 h-5" />
-              </button>
-
-              <button
-                type="submit"
-                disabled={isAnalyzing || !prompt.trim()}
-                className="bg-white text-black px-8 py-3 rounded-xl font-semibold hover:bg-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {isAnalyzing ? (
-                  <><Loader2 className="w-5 h-5 animate-spin" /> 调度中</>
-                ) : (
-                  '深度投研'
-                )}
-              </button>
-            </div>
-          </form>
-
-          {/* 模型配置面板 (下拉动画) */}
+      <main className="max-w-6xl mx-auto px-6 py-8">
+        <div className="mb-4">
+          <button 
+            onClick={() => setShowModelSettings(!showModelSettings)}
+            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            <SlidersHorizontal className="w-4 h-4" /> 
+            专家模型分配策略 {showModelSettings ? '▲' : '▼'}
+          </button>
+          
           <AnimatePresence>
-            {showConfig && (
-              <motion.div
-                initial={{ opacity: 0, height: 0, y: -20 }}
-                animate={{ opacity: 1, height: 'auto', y: 0 }}
-                exit={{ opacity: 0, height: 0, y: -20 }}
-                className="overflow-hidden mt-2 relative z-10"
+            {showModelSettings && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-4 bg-slate-800/50 p-4 rounded-xl border border-slate-700"
               >
-                <div className="bg-[#121214] border border-white/10 rounded-2xl p-6 shadow-xl grid md:grid-cols-2 gap-6">
-                  {/* 多空博弈模型选择 */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-400 flex items-center gap-2">
-                      <BrainCircuit className="w-4 h-4" />
-                      多空博弈辩论模型 (Debate Agent)
-                    </label>
+                {Object.entries({
+                  intent: '意图解析 (前台)',
+                  valuation: '估值专家 (量化)',
+                  debate_model: '多空分析师 (辩论)',
+                  chief_model: '首席投委会 (终审)'
+                }).map(([key, label]) => (
+                  <div key={key} className="flex flex-col gap-1">
+                    <label className="text-xs text-slate-400">{label}</label>
                     <select
-                      value={debateModel}
-                      onChange={(e) => setDebateModel(e.target.value)}
-                      disabled={isAnalyzing}
-                      className="w-full bg-[#0a0a0b] border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:border-blue-500/50 appearance-none cursor-pointer"
+                      value={nodeModels[key as keyof typeof nodeModels]}
+                      onChange={(e) => setNodeModels({...nodeModels, [key]: e.target.value})}
+                      className="bg-slate-900 text-sm text-white border border-slate-600 rounded px-2 py-1 outline-none focus:border-blue-500"
                     >
-                      {AVAILABLE_MODELS.map(model => (
-                        <option key={model.id} value={model.id}>{model.name}</option>
+                      {AVAILABLE_MODELS.map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
                       ))}
                     </select>
-                    <p className="text-xs text-slate-500">负责生成红蓝两方的对抗性策略分析。推荐使用推理速度快、逻辑发散的模型。</p>
                   </div>
-
-                  {/* 首席分析师模型选择 */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-400 flex items-center gap-2">
-                      <Scale className="w-4 h-4" />
-                      首席总管决策模型 (Chief Agent)
-                    </label>
-                    <select
-                      value={chiefModel}
-                      onChange={(e) => setChiefModel(e.target.value)}
-                      disabled={isAnalyzing}
-                      className="w-full bg-[#0a0a0b] border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:border-blue-500/50 appearance-none cursor-pointer"
-                    >
-                      {AVAILABLE_MODELS.map(model => (
-                        <option key={model.id} value={model.id}>{model.name}</option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-slate-500">负责最终研报的拍板与合成。推荐使用逻辑严密、长文本生成能力极强的旗舰模型（如 GPT-4o）。</p>
-                  </div>
-                </div>
+                ))}
               </motion.div>
             )}
           </AnimatePresence>
-
-          {error && (
-            <div className="mt-4 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-center gap-3 text-rose-400">
-              <AlertCircle className="w-5 h-5" />
-              <p>{error}</p>
-            </div>
-          )}
+        </div>
+        
+        {/* 输入区域 */}
+        <div className="bg-slate-900 rounded-2xl p-2 border border-slate-800 shadow-xl flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input 
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !isLoading && !isWaitingFeedback && handleAnalyze()}
+              placeholder="e.g. 帮我深度调研特斯拉 (TSLA)，我担心它的利润率下滑，打算长线持有..."
+              className="w-full bg-transparent border-none py-4 pl-12 pr-4 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-0 text-lg"
+              disabled={isLoading || isWaitingFeedback}
+            />
+          </div>
+          <button 
+            onClick={() => handleAnalyze()}
+            disabled={isLoading || !input.trim() || isWaitingFeedback}
+            className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : '启动调研'}
+          </button>
         </div>
 
-        {(isAnalyzing || completedNodes.length > 0) && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            className="mb-12 bg-[#121214] border border-white/5 rounded-2xl p-6 shadow-xl overflow-x-auto"
-          >
-            {/* 使用 Graph 拓扑布局体现并行 */}
-            <div className="flex justify-between items-center relative min-w-[600px] py-4">
-              {/* 贯穿全局的背景连线 */}
-              <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-0.5 bg-slate-800 -z-10" />
-              
-              {STAGE_GROUPS.map((group, groupIdx) => (
-                <div key={groupIdx} className="flex flex-col gap-6 relative z-10 bg-[#121214] py-2 px-1">
-                  {group.map(step => {
-                    const isCompleted = completedNodes.includes(step.id);
-                    const isActive = activeNodes.includes(step.id);
-                    
-                    return (
-                      <div key={step.id} className="flex flex-col items-center gap-2">
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                          isCompleted 
-                            ? 'bg-blue-500/20 border-blue-500 text-blue-400' 
-                            : isActive 
-                            ? 'bg-slate-800 border-blue-400 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)] scale-110' 
-                            : 'bg-slate-900 border-slate-800 text-slate-600'
-                        }`}>
-                          {isActive ? (
-                            <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-                          ) : (
-                            <step.icon className={`w-5 h-5 ${isCompleted ? step.color : ''}`} />
-                          )}
-                        </div>
-                        <span className={`text-[11px] font-medium tracking-wide whitespace-nowrap ${isCompleted || isActive ? 'text-slate-300' : 'text-slate-600'}`}>
-                          {step.label}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-
+        {/* Agent 工作流展示 */}
         <AnimatePresence>
-          {agentData.ticker && (
-             <motion.div 
-             ref={resultsRef}
-             initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }}
-             className="space-y-6"
-           >
-             {/* 标的概览 */}
-             <div className="flex flex-wrap items-center gap-4 mb-8">
-               <div className="text-4xl font-black text-white tracking-tight px-6 py-2 bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-xl shadow-lg">
-                 {agentData.ticker}
-               </div>
-               {agentData.sector && (
-                 <span className="px-4 py-2 bg-blue-900/30 text-blue-400 border border-blue-800/50 rounded-lg text-sm font-medium">
-                   Sector: {agentData.sector}
-                 </span>
-               )}
-               {agentData.investment_horizon && (
-                 <span className="px-4 py-2 bg-slate-800 text-slate-300 border border-slate-700 rounded-lg text-sm font-medium">
-                   Horizon: {agentData.investment_horizon}
-                 </span>
-               )}
-             </div>
+          {(isLoading || completedNodes.size > 0 || isWaitingFeedback) && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              className="mt-12 bg-slate-900/50 border border-slate-800 rounded-2xl p-8"
+            >
+              <h3 className="text-sm font-medium text-slate-400 mb-8 uppercase tracking-wider flex items-center gap-2">
+                <BrainCircuit className="w-4 h-4" /> Agentic Reasoning Process
+              </h3>
+              
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                {STAGE_GROUPS.map((group, groupIdx) => (
+                  <React.Fragment key={groupIdx}>
+                    <div className="flex flex-col gap-3 w-full md:w-auto">
+                      {group.map(stage => {
+                        const Icon = stage.icon;
+                        const isCompleted = completedNodes.has(stage.id);
+                        const isActive = activeNode === stage.id;
 
-              {/* 智能估值卡片 */}
-              {agentData.valuation_data && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                  className="bg-[#18181b] border border-amber-900/30 rounded-2xl overflow-hidden shadow-xl"
-                >
-                  <div className="bg-amber-900/20 px-6 py-4 border-b border-amber-900/30 flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <DollarSign className="w-5 h-5 text-amber-400" />
-                      <h3 className="text-lg font-semibold text-white">
-                        智能估值分析 <span className="text-sm font-normal text-amber-400/60 ml-2">[{agentData.valuation_data.selected_method}]</span>
-                      </h3>
-                    </div>
-                    {/* 结论勋章 */}
-                    <div className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                      agentData.valuation_data.verdict?.includes('低估') ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
-                      agentData.valuation_data.verdict?.includes('高估') ? 'bg-rose-500/10 border-rose-500/50 text-rose-400' :
-                      'bg-blue-500/10 border-blue-500/50 text-blue-400'
-                    }`}>
-                      {agentData.valuation_data.verdict}
-                    </div>
-                  </div>
-
-                  <div className="p-6">
-                    {/* 模型选择理由 */}
-                    <div className="mb-6 p-4 bg-amber-900/10 border-l-4 border-amber-500/50 rounded-r-lg">
-                      <p className="text-sm text-amber-100/80 italic">
-                        <span className="font-bold text-amber-400">路由决策：</span>
-                        {agentData.valuation_data.reasoning}
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                      {/* 左侧：核心指标动态列表 */}
-                      <div>
-                        <h4 className="text-sm font-medium text-slate-400 mb-4 uppercase tracking-wider">关键估值参数</h4>
-                        <div className="space-y-3">
-                          {Object.entries(agentData.valuation_data.key_metrics || {}).map(([key, value]) => (
-                            <div key={key} className="flex justify-between items-center border-b border-slate-800 pb-2">
-                              <span className="text-slate-400 text-sm">{key}</span>
-                              <span className="text-white font-mono font-medium">{String(value)}</span>
+                        return (
+                          <div 
+                            key={stage.id}
+                            className={`flex items-center gap-3 p-3 rounded-xl transition-all duration-300 ${
+                              isActive ? 'bg-blue-500/10 border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 
+                              isCompleted ? 'bg-emerald-500/10 border border-emerald-500/20' : 
+                              'bg-slate-800/50 border border-slate-700/50 opacity-50'
+                            }`}
+                          >
+                            <div className={`p-2 rounded-lg ${
+                              isActive ? 'bg-blue-500 text-white animate-pulse' : 
+                              isCompleted ? 'bg-emerald-500 text-white' : 
+                              'bg-slate-700 text-slate-400'
+                            }`}>
+                              {isActive ? <Loader2 className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />}
                             </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* 右侧：价格对比可视化 */}
-                      <div className="flex flex-col justify-center items-center p-6 bg-slate-900/50 rounded-xl border border-slate-800">
-                        <div className="text-sm text-slate-400 mb-2">估算内在价值 (Intrinsic Value)</div>
-                        <div className="text-4xl font-bold text-amber-400 mb-4">
-                          ${agentData.valuation_data.intrinsic_value?.toFixed(2)}
-                        </div>
-                        
-                        <div className="w-full space-y-2">
-                          <div className="flex justify-between text-xs">
-                            <span className="text-slate-500">当前价: ${agentData.valuation_data.current_price || '--'}</span>
-                            <span className={agentData.valuation_data.intrinsic_value! > (agentData.valuation_data.current_price || 0) ? 'text-emerald-400' : 'text-rose-400'}>
-                              空间: {(((agentData.valuation_data.intrinsic_value! / (agentData.valuation_data.current_price || 1)) - 1) * 100).toFixed(1)}%
+                            <span className={`font-medium text-sm ${
+                              isActive ? 'text-blue-400' : isCompleted ? 'text-emerald-400' : 'text-slate-400'
+                            }`}>
+                              {stage.label}
                             </span>
                           </div>
-                          {/* 简易进度条模拟溢价/折价 */}
-                          <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                            <motion.div 
-                              initial={{ width: 0 }}
-                              animate={{ width: '70%' }} // 这里可以根据现价和估价的比例动态计算
-                              className={`h-full ${agentData.valuation_data.intrinsic_value! > (agentData.valuation_data.current_price || 0) ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                            />
-                          </div>
-                        </div>
-                      </div>
+                        );
+                      })}
                     </div>
-                  </div>
-                </motion.div>
-              )}
-             {(agentData.bull_thesis || agentData.bear_thesis) && (
-               <div className="grid md:grid-cols-2 gap-6">
-                 {/* 多头报告 */}
-                 <div className="bg-gradient-to-b from-emerald-950/20 to-[#121214] border border-emerald-900/30 rounded-2xl p-6 relative overflow-hidden">
-                   <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl" />
-                   <div className="flex items-center gap-3 mb-6 border-b border-emerald-900/30 pb-4">
-                     <div className="p-2 bg-emerald-500/10 rounded-lg"><TrendingUp className="w-6 h-6 text-emerald-400" /></div>
-                     <h3 className="text-xl font-bold text-emerald-400">多头策略 (Bull Thesis)</h3>
-                   </div>
-                   <div className="prose prose-invert prose-emerald max-w-none prose-sm">
-                     {agentData.bull_thesis ? (
-                       <ReactMarkdown>{agentData.bull_thesis}</ReactMarkdown>
-                     ) : (
-                       <div className="flex items-center gap-2 text-emerald-600"><Loader2 className="w-4 h-4 animate-spin" /> 多头专家正在建构逻辑...</div>
-                     )}
-                   </div>
-                 </div>
-
-                 {/* 空头报告 */}
-                 <div className="bg-gradient-to-b from-rose-950/20 to-[#121214] border border-rose-900/30 rounded-2xl p-6 relative overflow-hidden">
-                   <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl" />
-                   <div className="flex items-center gap-3 mb-6 border-b border-rose-900/30 pb-4">
-                     <div className="p-2 bg-rose-500/10 rounded-lg"><TrendingDown className="w-6 h-6 text-rose-400" /></div>
-                     <h3 className="text-xl font-bold text-rose-400">空头策略 (Bear Thesis)</h3>
-                   </div>
-                   <div className="prose prose-invert prose-rose max-w-none prose-sm">
-                     {agentData.bear_thesis ? (
-                       <ReactMarkdown>{agentData.bear_thesis}</ReactMarkdown>
-                     ) : (
-                       <div className="flex items-center gap-2 text-rose-600"><Loader2 className="w-4 h-4 animate-spin" /> 空头专家正在寻找破绽...</div>
-                     )}
-                   </div>
-                 </div>
-               </div>
-             )}
-
-             {/* 首席投资官最终决断 */}
-             {agentData.final_report && (
-               <motion.div 
-                 initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.2 }}
-                 className="mt-8 bg-[#18181b] border-2 border-blue-900/50 rounded-2xl shadow-2xl overflow-hidden"
-               >
-                 <div className="bg-gradient-to-r from-blue-900/40 to-slate-900 px-8 py-5 border-b border-blue-900/50 flex items-center gap-4">
-                   <div className="p-2 bg-blue-500/20 rounded-lg"><Scale className="w-6 h-6 text-blue-400" /></div>
-                   <div>
-                     <h2 className="text-2xl font-bold text-white tracking-wide">首席投委会最终裁决 (IC Report)</h2>
-                     <p className="text-blue-400/80 text-sm mt-1">Chief Investment Officer Synthesis</p>
-                   </div>
-                 </div>
-                 <div className="p-8 prose prose-invert prose-lg max-w-none prose-headings:text-white prose-a:text-blue-400 prose-strong:text-blue-300">
-                   <ReactMarkdown>{agentData.final_report}</ReactMarkdown>
-                 </div>
-               </motion.div>
-             )}
-           </motion.div>
+                    {groupIdx < STAGE_GROUPS.length - 1 && (
+                      <div className="hidden md:block w-8 h-px bg-slate-700" />
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+            </motion.div>
           )}
         </AnimatePresence>
+
+        {/* 动态内容展示区 */}
+        <div className="mt-8 space-y-6">
+          
+          {/* 基本信息 */}
+          {agentData.ticker && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-4 mb-8">
+              <div className="px-4 py-2 bg-slate-800 rounded-lg border border-slate-700 font-mono text-blue-400 font-bold">
+                {agentData.ticker}
+              </div>
+              <div className="px-4 py-2 bg-slate-800 rounded-lg border border-slate-700 text-slate-300 text-sm flex items-center">
+                板块: {agentData.sector} | 周期: {agentData.investment_horizon}
+              </div>
+            </motion.div>
+          )}
+
+          {/*估值结果看板 (修复卡片消失与数据刷新动画) */}
+          {(agentData.valuation_data?.selected_method || activeNode === 'valuation') && (
+            <motion.div 
+              // 🌟 核心修复 1：绑定 key，一旦价值改变，强制触发一次 React 的出现动画
+              key={agentData.valuation_data?.intrinsic_value || 'loading_card'} 
+              initial={{ opacity: 0, y: 20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              className="mb-8 bg-slate-800/60 border border-slate-700/80 rounded-xl p-6 shadow-lg backdrop-blur-sm"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 bg-emerald-500/20 rounded-lg">
+                  <DollarSign className="w-5 h-5 text-emerald-400" />
+                </div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-3">
+                  量化估值模型 (Valuation Dashboard)
+                  {agentData.valuation_data?.selected_method && (
+                    <span className="px-2 py-1 bg-slate-700 text-slate-300 text-xs rounded border border-slate-600 font-normal">
+                      {agentData.valuation_data.selected_method === 'calculate_dcf' ? 'DCF 绝对估值法' : 
+                       agentData.valuation_data.selected_method === 'calculate_ps_valuation' ? 'P/S 相对估值法' : 
+                       agentData.valuation_data.selected_method === 'calculate_ev_ebitda' ? 'EV/EBITDA 乘数法' : '自定义模型'}
+                    </span>
+                  )}
+                </h3>
+              </div>
+              
+              {/* 🌟 核心修复 2：严格判断 !== undefined，防止数字 0 被判定为 false */}
+              {agentData.valuation_data?.intrinsic_value !== undefined ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* 当前价格 */}
+                  <div className="bg-slate-900/50 p-5 rounded-xl border border-slate-700/50 relative overflow-hidden">
+                    <p className="text-sm text-slate-400 mb-2">当前股价 (Current Price)</p>
+                    <p className="text-3xl font-mono text-white flex items-baseline gap-1">
+                      <span className="text-lg text-slate-500">$</span>
+                      {agentData.valuation_data.current_price?.toFixed(2) || 'N/A'}
+                    </p>
+                  </div>
+
+                  {/* 内在价值 */}
+                  <div className="bg-slate-900/50 p-5 rounded-xl border border-blue-900/50 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-16 h-16 bg-blue-500/10 rounded-bl-full blur-xl"></div>
+                    <p className="text-sm text-blue-300/80 mb-2">模型测算内在价值 (Intrinsic Value)</p>
+                    <p className="text-3xl font-mono text-blue-400 flex items-baseline gap-1">
+                      <span className="text-lg text-blue-500/50">$</span>
+                      {/* 如果算出 0，直接显示 0.00 */}
+                      {agentData.valuation_data.intrinsic_value.toFixed(2)}
+                    </p>
+                  </div>
+
+                  {/* 估值结论 (动态颜色) */}
+                  <div className={`p-5 rounded-xl border relative overflow-hidden ${
+                    agentData.valuation_data.verdict?.includes('低估') || agentData.valuation_data.verdict?.includes('看多') 
+                      ? 'bg-emerald-900/20 border-emerald-500/30 text-emerald-400' 
+                      : agentData.valuation_data.verdict?.includes('高估') || agentData.valuation_data.verdict?.includes('泡沫') || agentData.valuation_data.verdict?.includes('看空') 
+                      ? 'bg-rose-900/20 border-rose-500/30 text-rose-400' 
+                      : 'bg-yellow-900/20 border-yellow-500/30 text-yellow-400'
+                  }`}>
+                    <p className="text-sm opacity-80 mb-2">系统初筛结论 (System Verdict)</p>
+                    <p className="text-2xl font-bold tracking-wide">
+                      {agentData.valuation_data.verdict || '需要人工复核'}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                // 加载中状态
+                <div className="flex items-center gap-3 text-slate-400 p-4 bg-slate-900/50 rounded-lg border border-slate-800">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" /> 
+                  <span className="animate-pulse">正在提取财务数据并构建估值模型...</span>
+                </div>
+              )}
+            </motion.div>
+          )}
+          {/* 两侧辩论区 */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* 多头观点 */}
+            {(agentData.bull_thesis || activeNode === 'bull_expert') && (
+              <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="bg-emerald-950/20 border border-emerald-900/50 rounded-xl p-6">
+                <h3 className="text-emerald-400 font-bold flex items-center gap-2 mb-4">
+                  <TrendingUp className="w-5 h-5" /> Bull Thesis (多头逻辑)
+                </h3>
+                {agentData.bull_thesis ? (
+                  <div className="prose prose-invert prose-sm prose-emerald"><ReactMarkdown>{agentData.bull_thesis}</ReactMarkdown></div>
+                ) : (
+                  <div className="flex items-center gap-2 text-emerald-600/50"><Loader2 className="w-4 h-4 animate-spin" /> 多头专家正在撰写报告...</div>
+                )}
+              </motion.div>
+            )}
+
+            {/* 空头观点 */}
+            {(agentData.bear_thesis || activeNode === 'bear_expert') && (
+              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-6">
+                <h3 className="text-rose-400 font-bold flex items-center gap-2 mb-4">
+                  <TrendingDown className="w-5 h-5" /> Bear Thesis (空头逻辑)
+                </h3>
+                {agentData.bear_thesis ? (
+                  <div className="prose prose-invert prose-sm prose-rose"><ReactMarkdown>{agentData.bear_thesis}</ReactMarkdown></div>
+                ) : (
+                  <div className="flex items-center gap-2 text-rose-600/50"><Loader2 className="w-4 h-4 animate-spin" /> 空头专家正在寻找破绽...</div>
+                )}
+              </motion.div>
+            )}
+          </div>
+
+          {/* 🌟 CIO 交互看板 (动态适配模型) */}
+          {isWaitingFeedback && (
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
+              <InteractiveValuation 
+                initialData={agentData.valuation_data || {}} 
+                threadId={threadId}
+                onConfirm={handleResumeAfterFeedback} 
+              />
+            </motion.div>
+          )}
+
+          {/* 终版报告 */}
+          {agentData.final_report && (
+            <motion.div 
+              ref={reportRef} 
+              initial={{ opacity: 0, y: 20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              transition={{ delay: 0.2 }}
+              className="mt-12 bg-[#141416] border border-blue-900/50 rounded-2xl shadow-2xl overflow-hidden relative group"
+            >
+              <button 
+                onClick={exportToPDF}
+                className="absolute top-5 right-6 px-4 py-2 bg-slate-800/80 hover:bg-slate-700 border border-slate-600 rounded-lg flex items-center gap-2 text-sm text-slate-200 transition-all z-10 opacity-70 group-hover:opacity-100"
+              >
+                <Download className="w-4 h-4" /> 导出 PDF
+              </button>
+
+              <div className="bg-gradient-to-r from-blue-900/40 via-slate-900 to-[#141416] px-8 py-6 border-b border-blue-900/30 flex items-center gap-4">
+                <div className="p-3 bg-blue-500/20 rounded-xl"><Scale className="w-6 h-6 text-blue-400" /></div>
+                <div>
+                  <h2 className="text-2xl font-bold text-white tracking-wide">首席投委会最终裁决 (IC Report)</h2>
+                  <p className="text-blue-400/80 text-sm mt-1">Chief Investment Officer Synthesis & Final Verdict</p>
+                </div>
+              </div>
+              
+              <div className="p-8 md:p-10 prose prose-invert prose-lg max-w-none prose-headings:text-white prose-a:text-blue-400 prose-strong:text-blue-300">
+                <ReactMarkdown>{agentData.final_report}</ReactMarkdown>
+              </div>
+
+              <div className="py-4 text-center text-xs text-slate-600 border-t border-slate-800/50 bg-[#101012]">
+                Generated by QuantFinance AI Agent • Engine: LangGraph & qwen3.5-flash • {new Date().toLocaleDateString()}
+              </div>
+            </motion.div>
+          )}
+
+        </div>
       </main>
     </div>
   );

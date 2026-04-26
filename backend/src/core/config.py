@@ -9,7 +9,8 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     MODEL_NAME = os.getenv("MODEL_NAME", "qwen3.5-flash") # 设个缺省值
     OPENAI_API_BASE_URL = os.getenv("OPENAI_API_BASE_URL")
-
+    DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/quant_agent")
+    
     @classmethod
     def get_llm(cls, temperature=0.0, model_name="qwen3.5-flash", streaming=False):
         """

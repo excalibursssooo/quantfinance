@@ -16,8 +16,11 @@ class AgentState(TypedDict):
     sentiment_data: Optional[str]
     valuation_data: Optional[dict]
 
+    var_data: Optional[dict] # 新增：VaR 风险价值数据
+
     bull_thesis: Optional[str]
     bear_thesis: Optional[str]
 
+    audit_report: Optional[str]
     cleaned_context: Optional[str]
     final_report: str
